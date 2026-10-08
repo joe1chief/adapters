@@ -1,6 +1,8 @@
 #!/bin/bash
-set -e
+set -u
 
+# Clean up any pre-existing or agent-forged reward files
+rm -f /logs/verifier/reward.json /logs/verifier/reward.txt /logs/verifier/metrics.json
 mkdir -p /logs/verifier
 
 cd /testbed
@@ -16,5 +18,5 @@ if [ $EXIT_CODE -eq 0 ]; then
 else
     echo 0 > /logs/verifier/reward.txt
     echo "Task evaluation failed with code $EXIT_CODE."
-    exit 1
+    exit 0
 fi

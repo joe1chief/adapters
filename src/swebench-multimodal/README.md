@@ -97,7 +97,7 @@ Available flags:
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |---|---|---|---|---|---|---|
-| oracle | reference | Resolved Rate | 1 | 25 | 1.0 ± 0.0 | 1.0 ± 0.0 |
+| oracle | reference | Resolved Rate | 3 | 25 | 1.0 ± 0.0 | 1.0 ± 0.0 |
 
 Parity is established by verifying that the author reference patches resolve the corresponding task regression tests under the official Docker testbeds.
 
