@@ -6,7 +6,7 @@
 # upstream eval_clean OR grading (robust to numpy/scipy API drift). The HDF5 test
 # data is bind-mounted by environment/docker-compose.yaml via
 # $HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH — it is never baked into the image.
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-venv \
