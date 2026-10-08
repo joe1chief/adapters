@@ -96,7 +96,7 @@ Available flags:
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |---|---|---|---|---|---|---|
-| oracle | reference | Pass Rate | 1 | 25 | 1.0 ± 0.0 | 1.0 ± 0.0 |
+| oracle | reference | Pass Rate | 3 | 25 | 1.0 ± 0.0 | 1.0 ± 0.0 |
 
 Parity is established by verifying that the author reference implementation achieves 100% pass rate under differential testing against the fuzzer test suite, reproducing upstream ground-truth performance.
 
