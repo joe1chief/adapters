@@ -1,0 +1,137 @@
+name: Lighthouse eight offline dependency inventories
+on:
+  push:
+    branches: [diagnostic/lighthouse-offline-deps8-20261116]
+permissions:
+  contents: read
+concurrency:
+  group: lighthouse-offline-deps8-once-20261116
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Serial immutable-image read-only offline inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, platform, shutil, subprocess, time
+          assert platform.machine() == 'x86_64'
+          # Public Docker Hub linux/amd64 manifest digests, independently verified.
+          cases = [
+            ('1446','63957e3552c99b7de52e8041df922df82b12fb5b956b4349c45efb56cef94607','a10f6e0a31819704634014aed831165da43bcf41'),
+            ('1549','3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347','e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c'),
+            ('1563','63b35eb893d91be16654241a15d62569e0120a61af14fa86b893d641c044139b','270f70bf2b7644b7f9103b3136aeb1ba8e012a87'),
+            ('1617','6f514df8a43d0b6ad17ae4b3fa4b014e7534e27691f40c5d3973af6444dfe702','4a63f3cea271bd0f209fbc648dd3612d685b31ab'),
+            ('1755','980a0411dcadf00f9439cd8ea094d4a369010d69d55f190696ec0e70b2bd0618','4e140a9f74a465e72ab0e57fad1c6dbd5441654d'),
+            ('1786','4d54d137d3e69cf63e8e4469a7ae2156a1955c5b901c34ca5183a4bd5f660518','475245cabcf984afffeca52b9f48a767556bb72a'),
+            ('1895','6b31b5edd8b2c2c81db578641c73df40640045a73aa3d555ebf21d33a962e9aa','902585b8bec8d5a462ab2cc43c50d9b2dfd0a56b'),
+            ('1916','87a57055b156ccbd69786cb97cad322577f12aacccde32029c5d0893001ef52c','476e7806ef40a758dd30703b613e8480a2304bba'),
+          ]
+          # Built-ins only: never import benchmark dependencies or execute repository code.
+          probe = r'''
+          'use strict';
+          const fs = require('fs'), path = require('path'), crypto = require('crypto');
+          function exists(p) { try { fs.accessSync(p); return true; } catch(e) { return false; } }
+          function read(p) { return fs.readFileSync(p, 'utf8'); }
+          function hash(p) { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); }
+          function pkg(p) { try { return JSON.parse(read(p)); } catch(e) { return null; } }
+          function locate(dir, name) {
+            if (!/^(@[a-zA-Z0-9_.-]+\/)?[a-zA-Z0-9_.-]+$/.test(name)) return null;
+            while (true) {
+              const p = path.join(dir, 'node_modules', name, 'package.json');
+              if (exists(p)) return p;
+              const parent = path.dirname(dir); if(parent === dir) return null; dir = parent;
+            }
+          }
+          let head = read('/testbed/.git/HEAD').trim();
+          if (head.indexOf('ref: ') === 0) {
+            const ref = head.slice(5);
+            if (!/^refs\/[a-zA-Z0-9_./-]+$/.test(ref) || ref.indexOf('..') >= 0) throw Error('invalid ref');
+            const refPath = '/testbed/.git/' + ref;
+            if (exists(refPath)) head = read(refPath).trim();
+            else {
+              const hit = read('/testbed/.git/packed-refs').split('\n').filter(x => x.endsWith(' ' + ref));
+              head = hit.length === 1 ? hit[0].split(' ')[0] : 'unresolved';
+            }
+          }
+          const out = {node:process.version, base_commit:head, packages:[], caches:[], offline_install_closure:'NOT_PROVEN', tests_executed:false};
+          for (const rel of ['', 'lighthouse-cli', 'lighthouse-extension', 'lighthouse-viewer']) {
+            const dir = path.join('/testbed',rel), file = path.join(dir,'package.json'), manifest = pkg(file);
+            const r = {directory:rel || '.', manifest_present:!!manifest};
+            if (manifest) {
+              r.manifest_sha256 = hash(file); r.locks = {};
+              for (const f of ['package-lock.json','npm-shrinkwrap.json','yarn.lock']) if(exists(path.join(dir,f))) r.locks[f] = hash(path.join(dir,f));
+              r.dependencies = []; r.missing = [];
+              const deps = Object.assign({},manifest.dependencies || {},manifest.devDependencies || {});
+              for (const name of Object.keys(deps).sort()) {
+                const found = locate(dir,name), installed = found && pkg(found);
+                r.dependencies.push({name:name,declared:deps[name],installed:installed ? installed.version : null});
+                if(!installed) r.missing.push(name);
+              }
+              r.mocha_package_present = !!locate(dir,'mocha');
+              r.mocha_binary_present = exists(path.join(dir,'node_modules/.bin/mocha'));
+            }
+            out.packages.push(r);
+          }
+          for (const p of ['/root/.npm','/root/.npm/_cacache','/home/chromeuser/.npm','/usr/local/share/.cache/yarn']) {
+            let entries = null; try { entries = fs.readdirSync(p).length; } catch(e) {}
+            out.caches.push({path:p,present:exists(p),immediate_entries:entries});
+          }
+          console.log(JSON.stringify(out));
+          '''
+          started = time.monotonic()
+          results = []
+          def run(args, timeout, **kw):
+              return subprocess.run(args, text=True, capture_output=True, timeout=timeout, **kw)
+          for task, digest, expected_base in cases:
+              image = 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-' + task + '@sha256:' + digest
+              cname = 'offline-deps-' + task
+              result = {'task':task,'image':image,'status':'not_started','tests_executed':False,'offline_install_closure':'NOT_PROVEN'}
+              t = time.monotonic()
+              try:
+                  if t-started > 25*60:
+                      result['status']='job_budget_exhausted'; continue
+                  free = shutil.disk_usage('/').free
+                  result['free_bytes_before']=free
+                  if free < 8*1024**3:
+                      result['status']='insufficient_disk'; continue
+                  pull = run(['docker','pull','--platform','linux/amd64',image],150)
+                  if pull.returncode:
+                      result.update(status='image_pull_failed',diagnostic=pull.stderr[-1500:]); continue
+                  inspect = run(['docker','image','inspect',image],15)
+                  data = json.loads(inspect.stdout)[0]
+                  result['image_id']=data['Id']; result['architecture']=data['Architecture']; result['repo_digests']=data.get('RepoDigests',[])
+                  if data['Architecture'] != 'amd64' or data['Os'] != 'linux':
+                      result['status']='platform_mismatch'; continue
+                  proc = run(['docker','run','--rm','--name',cname,'--platform','linux/amd64','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','64','--memory','512m','--cpus','1','--entrypoint','/usr/local/nvm/versions/node/v8.17.0/bin/node','-i',image,'-'],30,input=probe)
+                  if proc.returncode:
+                      result.update(status='probe_tooling_failed',exit_code=proc.returncode,diagnostic=proc.stderr[-1500:]); continue
+                  inventory=json.loads(proc.stdout)
+                  result['inventory']=inventory
+                  if inventory['base_commit'] != expected_base:
+                      result['status']='base_commit_mismatch'
+                  elif any(not p['manifest_present'] for p in inventory['packages']):
+                      result['status']='expected_package_manifest_missing'
+                  elif any(p.get('missing') for p in inventory['packages']):
+                      result['status']='declared_dependencies_missing'
+                  else:
+                      result['status']='direct_dependency_inventory_present_closure_unproven'
+              except subprocess.TimeoutExpired:
+                  result['status']='operation_timeout'
+              except Exception as exc:
+                  result.update(status='probe_or_metadata_error',diagnostic=str(exc)[:1000])
+              finally:
+                  run(['docker','rm','-f',cname],15)
+                  run(['docker','image','rm',image],25)
+                  result['seconds']=round(time.monotonic()-t,2)
+                  results.append(result)
+                  print('ITEM_RESULT '+json.dumps(result),flush=True)
+          print('FINAL_SUMMARY '+json.dumps([{k:r[k] for k in ['task','status','seconds','tests_executed','offline_install_closure']} for r in results]),flush=True)
+          assert len(results)==8
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## Eight immutable-image dependency inventories\nNo evaluator, gold patch, install hook, model, or benchmark code executed. Containers were offline, read-only, with no mounts or credentials. Presence is not proof of offline installation closure.\n\n')
+              for r in results: f.write('- '+r['task']+': '+r['status']+' ('+str(r['seconds'])+' s)\n')
+          PY
