@@ -1,0 +1,57 @@
+name: Lighthouse1549 fixed-image diagnostic
+on:
+  push:
+    branches: [diagnostic/lighthouse1549-20261116]
+permissions:
+  contents: read
+concurrency:
+  group: lighthouse1549-fixed-diagnostic
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Verify public fixed inputs and image
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          mkdir inputs
+          root=https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/8d3ed32f37af9ceb8b5778b92a0088384ed057d4/tasks/GoogleChrome__lighthouse-1549
+          for f in eval.sh gold.patch tests.json; do curl --fail --location --max-time 60 "$root/$f" -o "inputs/$f"; done
+          printf '%s\n' \
+            'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f  inputs/eval.sh' \
+            '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305  inputs/gold.patch' \
+            '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da  inputs/tests.json' | sha256sum -c -
+          image=swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347
+          timeout 600 docker pull --platform linux/amd64 "$image"
+          docker image inspect "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64
+      - name: Serial unchanged base and golden evaluator
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347
+          trap 'docker rm -f lighthouse1549-base lighthouse1549-golden >/dev/null 2>&1 || true' EXIT
+          for mode in base golden; do
+            c=lighthouse1549-$mode
+            docker create --platform linux/amd64 --network none --name "$c" "$image" /bin/bash -c 'sleep infinity'
+            docker start "$c"
+            docker cp inputs/eval.sh "$c":/tmp/eval.sh
+            sha=$(docker exec "$c" git -C /testbed rev-parse HEAD)
+            test "$sha" = e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c
+            if [ "$mode" = golden ]; then
+              docker cp inputs/gold.patch "$c":/tmp/gold.patch
+              docker exec "$c" git -C /testbed apply /tmp/gold.patch
+            fi
+            echo "=== BEGIN $mode: $(date -u --iso-8601=seconds) ==="
+            set +e
+            timeout 300 docker exec "$c" /bin/bash /tmp/eval.sh > "$mode.log" 2>&1
+            code=$?
+            set -e
+            cat "$mode.log"
+            echo "=== END $mode: outer_exit=$code $(date -u --iso-8601=seconds) ==="
+            echo 'Shell exit is NOT grading: judge FAIL_TO_PASS and PASS_TO_PASS from JSON logs.'
+            docker rm -f "$c"
+          done
