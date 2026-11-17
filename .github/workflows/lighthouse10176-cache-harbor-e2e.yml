@@ -1,0 +1,144 @@
+name: One-shot pinned Harbor Lighthouse 10176 offline cache
+on:
+  push:
+    branches: [diagnostic/lighthouse10176-cache-harbor-20261117]
+    paths: [.github/workflows/lighthouse10176-cache-harbor-e2e.yml]
+permissions:
+  contents: read
+concurrency:
+  group: lighthouse10176-cache-harbor-once-20261117
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Cache-only derived image oracle and no-op
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,platform,shutil,subprocess,time,urllib.request
+          P=pathlib.Path
+          start=time.monotonic();private=P('private-run-data');private.mkdir()
+          adapter='020529b6433a3c045a09c76dee281489eca474a4';harbor='1e5c5c6db929a10a140d05e606882c671ae20729';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+          cases=[{'id': '10176', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-10176@sha256:20f94e02ff408f1d68190bc111918225c06d6e1bce5a2756824a5bfbef1126bd', 'inputs': {'task.yaml': '34f996cee987a516948231b017cc8983c629d2a5534ab18d917defe3617d8bbb', 'eval.sh': 'd0b36b59a62a37edc11305408d39efc2bed3c79dcfaf068b417a2487e896c867', 'gold.patch': '280ae37886cbba613523a7984f1851e724f8fbc1e1f43b17649f45f1ccd81bb6', 'tests.json': 'bee10dfefc86aebff3efff4270740d348ded25c0141f2d9fb8aabbd7cddb3106', 'problem_statement.md': '45b6ecd56cbd435573a17df1a9afba0a55f23fab79b1a71385215e9a6f3adb7c', 'problem_assets/0-67442906-7c9d1380-f5b7-11e9-9449-e93d77734fb2.png': 'e6c71dadff45632955a2999be224ec0c2125504aed219b9633d1f31329e09100', 'problem_assets/1-67443023-f92ff200-f5b7-11e9-9d58-39d1a4985ffa.png': '511469b0d99031fa9106fb3bea2ef3ba8b8fed2a715559e869826c08693459b9'}}]
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'One task, cache-only derived image; not unmodified image, full25 or model parity','attempts':[]}
+          stage='setup'
+          def execute(argv,timeout=120,cwd=None):
+              with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+              if p.returncode:raise RuntimeError('command_nonzero')
+          def checkout(repo,commit,dest):
+              execute(['git','init','-q',dest]);execute(['git','-C',dest,'fetch','--depth','1',repo,commit],180);execute(['git','-C',dest,'checkout','--detach','FETCH_HEAD'])
+              assert subprocess.check_output(['git','-C',dest,'rev-parse','HEAD'],text=True).strip()==commit
+          def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+          def ids(kind):
+              cmd=['docker','ps','-aq'] if kind=='containers' else ['docker','image','ls','-q','--no-trunc']
+              return set(subprocess.check_output(cmd,text=True).split())
+          def cleanup_containers(before):
+              for cid in ids('containers')-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+          setup_ok=False
+          try:
+              assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+              execute(['docker','compose','version'])
+              stage='checkout';checkout('https://github.com/joe1chief/adapters.git',adapter,'adapter-source');checkout('https://github.com/harbor-framework/harbor.git',harbor,'harbor-source')
+              stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.8.22'],120)
+              execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+              py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');setup_ok=True
+          except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
+          for case in cases:
+              n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
+              case_summary={'task':n,'image':image,'source_sha256':case['inputs']};summary.setdefault('cases',[]).append(case_summary)
+              try:
+                  if not setup_ok:raise RuntimeError('setup_incomplete')
+                  if time.monotonic()-start>23*60:raise TimeoutError('budget')
+                  if shutil.disk_usage('.').free<7*1024**3:raise OSError('insufficient_disk')
+                  stage='public_inputs';td=P('task-source')/('GoogleChrome__lighthouse-'+n);td.mkdir(parents=True)
+                  for name,digest in case['inputs'].items():
+                      dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                      url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/GoogleChrome__lighthouse-'+n+'/'+name
+                      with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                      assert sha(dest)==digest
+                  meta=td/'task.yaml';text=meta.read_text();old='image: swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-'+n+':latest';assert text.count(old)==1;meta.write_text(text.replace(old,'image: '+image))
+                  stage='pull_fixed_base';execute(['docker','pull','--platform','linux/amd64',image],150)
+                  base_detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert base_detail['Architecture']=='amd64';case_summary['base_image_id']=base_detail['Id']
+                  build=P('cache-build');build.mkdir();(build/'cache-proof.js').write_text('const fs=require(\'fs\'),cp=require(\'child_process\'),crypto=require(\'crypto\'),path=require(\'path\');\nconst sh=(a)=>cp.execFileSync(a[0],a.slice(1),{encoding:\'utf8\'}).trim();\nconst digest=b=>crypto.createHash(\'sha256\').update(b).digest(\'hex\');\nfunction tree(root){let h=crypto.createHash(\'sha256\');function walk(p){for(let x of fs.readdirSync(p).sort()){let f=path.join(p,x),st=fs.lstatSync(f);if(st.isDirectory())walk(f);else if(st.isFile()){h.update(path.relative(root,f));h.update(fs.readFileSync(f));}else if(st.isSymbolicLink()){h.update(path.relative(root,f));h.update(fs.readlinkSync(f));}}}walk(root);return h.digest(\'hex\');}\nconst specs={\'5.6.0\':[\'a44c95237870b5e4f66f0aff948270df7ec9f277\',\'sha512-s9LeTXee2J+7qXQHJ1EHPbK4Mk5ZU820Wrw+EOxDRQcn2Tay4n+SvZaqJa6T8UpKu5mIomSh6nXoyuP1j2DzUw==\',\'14406ca5755c2d3133b0f0d2e409b8a69d6de39ad5aac3828030396e33f7277d\'],\'5.7.0\':[\'27199e0728273de9333d69b2be92f144cad94380\',\'sha512-pUHR7ryXqiew2agkQ3NppopqJDi5qkJtI86PyQ9LLtg1iGzwIsMz+QNq3ky5bPogSie7AkL/xvcObXu3Veh61Q==\',\'6947b12fe92005c36fc80ae3500a1c4e3f145c2dc30a40a26fd26ee2c84c95d9\']};\nconst dir=\'/tmp/cache-proof\',out=\'/tmp/cache-proof.json\';fs.mkdirSync(dir,{recursive:true});\nfunction install(v,offline){let d=path.join(dir,(offline?\'offline-\':\'warm-\')+v);fs.mkdirSync(d);fs.writeFileSync(d+\'/package.json\',JSON.stringify({name:\'cache-proof\',version:\'1.0.0\',private:true,dependencies:{\'js-library-detector\':\'^\'+v}}));fs.writeFileSync(d+\'/yarn.lock\',\'# yarn lockfile v1\\n\\njs-library-detector@^\'+v+\':\\n  version "\'+v+\'"\\n  resolved "https://registry.yarnpkg.com/js-library-detector/-/js-library-detector-\'+v+\'.tgz#\'+specs[v][0]+\'"\\n  integrity \'+specs[v][1]+\'\\n\');let args=[\'install\',\'--ignore-scripts\',\'--frozen-lockfile\',\'--non-interactive\'];if(offline)args.push(\'--offline\');cp.execFileSync(\'yarn\',args,{cwd:d,stdio:\'pipe\',timeout:90000});let actual=JSON.parse(fs.readFileSync(d+\'/node_modules/js-library-detector/package.json\')).version;if(actual!==v)throw Error(\'version mismatch\');fs.rmSync(d,{recursive:true});return {version:actual,offline,exit_code:0};}\nif(process.argv[2]===\'warm\'){let r={node:process.version,yarn:sh([\'yarn\',\'--version\']),uid:process.getuid(),baseline_tree_before:tree(\'/testbed\'),base_version:JSON.parse(fs.readFileSync(\'/testbed/node_modules/js-library-detector/package.json\')).version,steps:[]};if(r.base_version!==\'5.6.0\'||!r.yarn.startsWith(\'1.\'))throw Error(\'unsupported baseline\');for(let v of Object.keys(specs))r.steps.push(install(v,false));fs.writeFileSync(out,JSON.stringify(r));}\nelse{let r=JSON.parse(fs.readFileSync(out));r.steps.push(install(\'5.7.0\',true),install(\'5.6.0\',true));let cache=sh([\'yarn\',\'cache\',\'dir\']);r.cache_tarballs=[];for(let name of fs.readdirSync(cache)){if(!name.startsWith(\'npm-js-library-detector-\'))continue;let file=path.join(cache,name,\'node_modules/js-library-detector/.yarn-tarball.tgz\');if(!fs.existsSync(file))continue;let hash=digest(fs.readFileSync(file));for(let v of Object.keys(specs))if(hash===specs[v][2])r.cache_tarballs.push({version:v,sha256:hash,lock_integrity:specs[v][1]});}if(!Object.keys(specs).every(v=>r.cache_tarballs.some(x=>x.version===v)))throw Error(\'cache tarball integrity missing\');r.baseline_tree_after=tree(\'/testbed\');r.baseline_unchanged=r.baseline_tree_before===r.baseline_tree_after;if(!r.baseline_unchanged)throw Error(\'baseline changed\');r.offline_verification_network=\'none\';fs.writeFileSync(out,JSON.stringify(r));fs.rmSync(dir,{recursive:true});}\n')
+                  (build/'Dockerfile').write_text('FROM '+image+'\nCOPY cache-proof.js /tmp/cache-proof.js\nRUN node /tmp/cache-proof.js warm\nRUN --network=none node /tmp/cache-proof.js offline && rm /tmp/cache-proof.js\n')
+                  stage='cache_only_derived_image';execute(['docker','build','--platform','linux/amd64','--tag','harbor10176-cache:diagnostic',str(build)],300)
+                  derived=json.loads(subprocess.check_output(['docker','image','inspect','harbor10176-cache:diagnostic'],text=True))[0];case_summary['derived_image_id']=derived['Id']
+                  probe=subprocess.check_output(['docker','create','--network','none','harbor10176-cache:diagnostic'],text=True).strip()
+                  try:
+                      execute(['docker','cp',probe+':/tmp/cache-proof.json',str(private/'cache-proof.json')]);case_summary['cache_proof']=json.loads((private/'cache-proof.json').read_text())
+                  finally:execute(['docker','rm',probe])
+                  assert case_summary['cache_proof']['baseline_unchanged']
+                  # Local derived tag is immutable within this isolated job; attest exact content ID.
+                  # Generation still validates the official immutable base; derived substitution below is diagnostic-only.
+                  stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+                  with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','GoogleChrome__lighthouse-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
+                  task=P('generated/googlechrome-lighthouse-'+n).resolve();assert task.is_dir()
+                  dockerfile=task/'environment/Dockerfile';df=dockerfile.read_text();assert df.count('FROM '+image)==1
+                  dockerfile.write_text(df.replace('FROM '+image,'FROM '+derived['Id']));case_summary['diagnostic_dockerfile_sha256']=sha(dockerfile)
+                  case_summary['diagnostic_only_change']='FROM content-addressed cache-only derived image; original task/eval/gold/scoring unchanged'
+                  for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/tests.json','tests.json')]:assert sha(task/generated)==case['inputs'][original]
+                  case_summary['task_toml_sha256']=sha(task/'task.toml')
+                  stage='inspect_derived_image';image='harbor10176-cache:diagnostic'
+                  detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert detail['Architecture']=='amd64' and detail['Os']=='linux';case_summary['image_id']=detail['Id'];case_ok=True
+              except Exception as exc:case_summary.update(status='case_preflight_blocked',stage=stage,error_type=type(exc).__name__)
+              for agent in ['oracle','nop']:
+                  attempt={'task':n,'agent':agent,'fresh_harbor_execution':False};summary['attempts'].append(attempt)
+                  if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
+                  if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
+                  name='lighthouse'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                  try:
+                      ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
+                      attempt['fresh_harbor_execution']=True
+                      # Keep only these ephemeral task containers for post-verifier dependency inspection.
+                      # Stock task config, egress helper and criteria remain unchanged.
+                      with (private/(name+'.log')).open('wb') as f:r=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=f,stderr=f,timeout=300)
+                      attempt['cli_exit']=r.returncode;folder=P('trials')/name
+                      if (folder/'result.json').is_file():
+                          result=json.loads((folder/'result.json').read_text());attempt['exception_type']=(result.get('exception_info') or {}).get('exception_type');attempt['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+                          report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                          if report.is_file() and reward.is_file():
+                              q=json.loads(report.read_text());v=float(reward.read_text().strip());expected=1.0 if agent=='oracle' else 0.0
+                              attempt.update(reward=v,resolved=q.get('resolved'),valid_test_output=q.get('valid_test_output'),per_test=q.get('tests_status'))
+                              attempt['status']='expected_semantic_result' if v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                          else:attempt['status']='missing_exported_grading_evidence'
+                      else:attempt['status']='missing_harbor_result'
+                      output=folder/'verifier/test_output.log'
+                      if output.exists():
+                          attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
+                  except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                  except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                  finally:
+                      # Read JSON only, do not load dependency code or call npm/yarn beyond original eval.
+                      dependency=[]
+                      for cid in ids('containers')-before:
+                          dest=private/(name+'-'+cid[:12]+'-package.json')
+                          copied=subprocess.run(['docker','cp',cid+':/testbed/node_modules/js-library-detector/package.json',str(dest)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+                          if copied.returncode==0:
+                              try:pkg=json.loads(dest.read_text());dependency.append({'name':pkg.get('name'),'version':pkg.get('version'),'package_json_sha256':sha(dest)})
+                              except Exception:pass
+                      attempt['post_verifier_dependency_inventory']=dependency
+                      attempt['dependency_alignment']='not_claimed'
+                      expected_version='5.7.0' if agent=='oracle' else '5.6.0'
+                      attempt['dependency_accepted']=len(dependency)==1 and dependency[0]['version']==expected_version
+                      attempt['accepted']=attempt.get('status')=='expected_semantic_result' and attempt['dependency_accepted']
+                      if n=='10176' and agent=='oracle' and dependency:
+                          attempt['dependency_alignment']='expected_locked_5.7.0_present' if all(x['version']=='5.7.0' for x in dependency) else 'gold_lock_version_mismatch_even_if_tests_pass'
+                      if events:
+                          events.terminate()
+                          try:events.wait(timeout=5)
+                          except subprocess.TimeoutExpired:events.kill()
+                      if ef:ef.close()
+                      ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                      attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
+                      attempt['accepted']=attempt.get('accepted',False) and attempt['deny_all_exec_events']>0
+                      cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
+              if setup_ok:
+                  for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+          summary['seconds']=round(time.monotonic()-start,2)
+          assert len(summary['attempts'])==2
+          print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## 10176 cache-only derived-image Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full25 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          PY
