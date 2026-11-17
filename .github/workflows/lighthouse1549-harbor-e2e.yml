@@ -1,0 +1,142 @@
+name: One-shot pinned Harbor Lighthouse1549
+on:
+  push:
+    branches: [diagnostic/lighthouse1549-harbor-20261117]
+    paths: [.github/workflows/lighthouse1549-harbor-e2e.yml]
+permissions:
+  contents: read
+concurrency:
+  group: lighthouse1549-harbor-once-20261117
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Pinned setup and genuine Harbor oracle then no-op
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, platform, shutil, subprocess, time, urllib.request
+          P=pathlib.Path
+          start=time.monotonic()
+          adapter='020529b6433a3c045a09c76dee281489eca474a4'
+          harbor='1e5c5c6db929a10a140d05e606882c671ae20729'
+          source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+          image='swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347'
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_commit':source,'image':image,'scope':'Single task current adapter + stock Harbor Docker; not model parity or full25','model_calls':0,'attempts':[]}
+          private=P('private-run-data');private.mkdir()
+          stage='preflight'
+          def execute(argv,timeout=120,cwd=None):
+              with (private/'execution.log').open('ab') as f:
+                  p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+              if p.returncode:raise RuntimeError('nonzero command at '+stage)
+          def checkout(repo,commit,dest):
+              execute(['git','init','-q',dest]);execute(['git','-C',dest,'fetch','--depth','1',repo,commit],180);execute(['git','-C',dest,'checkout','--detach','FETCH_HEAD'])
+              assert subprocess.check_output(['git','-C',dest,'rev-parse','HEAD'],text=True).strip()==commit
+          def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+          events=None; event_file=None
+          try:
+              assert platform.machine()=='x86_64'
+              assert shutil.disk_usage('.').free>9*1024**3
+              execute(['docker','version']);execute(['docker','compose','version'])
+              stage='checkout exact public commits'
+              checkout('https://github.com/joe1chief/adapters.git',adapter,'adapter-source')
+              checkout('https://github.com/harbor-framework/harbor.git',harbor,'harbor-source')
+              stage='install locked official Harbor dependencies'
+              execute(['python3','-m','venv','bootstrap'])
+              execute(['bootstrap/bin/pip','install','uv==0.8.22'],120)
+              uv=str(P('bootstrap/bin/uv').resolve())
+              execute([uv,'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+              py=str(P('harbor-source/.venv/bin/python').resolve())
+              cli=str(P('harbor-source/.venv/bin/harbor').resolve())
+              summary['harbor_lock_sha256']=sha('harbor-source/uv.lock')
+              stage='verify public task bytes'
+              inputs={
+               'task.yaml':'78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057',
+               'eval.sh':'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f',
+               'gold.patch':'5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305',
+               'tests.json':'7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da',
+               'problem_statement.md':'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281',
+               'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png':'08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7'}
+              td=P('task-source/GoogleChrome__lighthouse-1549');td.mkdir(parents=True)
+              for name,digest in inputs.items():
+                  dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                  url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/GoogleChrome__lighthouse-1549/'+name
+                  with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                  assert sha(dest)==digest,name
+              # Sole source-metadata adjustment: pin the approved immutable image.
+              meta=td/'task.yaml';text=meta.read_text();old='image: swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549:latest'
+              assert text.count(old)==1;meta.write_text(text.replace(old,'image: '+image))
+              stage='generate using exact committed adapter'
+              env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+              with (private/'generation.log').open('wb') as f:
+                  subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','GoogleChrome__lighthouse-1549'],env=env,stdout=f,stderr=f,check=True,timeout=60)
+              task=P('generated/googlechrome-lighthouse-1549').resolve()
+              assert task.is_dir()
+              assert sha(task/'tests/eval.sh')==inputs['eval.sh']
+              assert sha(task/'solution/gold.patch')==inputs['gold.patch']
+              assert sha(task/'tests/tests.json')==inputs['tests.json']
+              summary['generated_task_toml_sha256']=sha(task/'task.toml')
+              summary['source_inputs_sha256']=inputs
+              stage='pull approved immutable task image'
+              execute(['docker','pull','--platform','linux/amd64',image],180)
+              detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0]
+              assert detail['Architecture']=='amd64' and detail['Os']=='linux'
+              summary['image_id']=detail['Id']
+              # Stock Harbor sidecar only: NET_ADMIN/NET_RAW in its isolated netns.
+              # No custom compose, host-network, socket exposure, privileged flags or task edits.
+              event_file=(private/'docker-events.jsonl').open('wb')
+              events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=event_file,stderr=subprocess.DEVNULL)
+              trials=P('trials').resolve()
+              for agent in ['oracle','nop']:
+                  if time.monotonic()-start>19*60:
+                      summary['attempts'].append({'agent':agent,'status':'not_started_budget'});continue
+                  stage='Harbor '+agent
+                  name='lighthouse1549-'+agent
+                  before=time.monotonic()
+                  attempt={'agent':agent,'trial_name':name,'fresh_harbor_execution':True}
+                  try:
+                      with (private/(agent+'.log')).open('wb') as f:
+                          result=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(trials),'--no-force-build'],stdout=f,stderr=f,timeout=480)
+                      attempt['cli_exit']=result.returncode
+                      folder=trials/name
+                      if not (folder/'result.json').is_file():
+                          attempt['status']='missing_harbor_result'
+                      else:
+                          r=json.loads((folder/'result.json').read_text())
+                          attempt['exception_type']=(r.get('exception_info') or {}).get('exception_type')
+                          attempt['harbor_rewards']=(r.get('verifier_result') or {}).get('rewards')
+                          report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                          if report.is_file() and reward.is_file():
+                              q=json.loads(report.read_text());v=float(reward.read_text().strip())
+                              attempt.update(reward=v,valid_test_output=q.get('valid_test_output'),resolved=q.get('resolved'))
+                              attempt['per_test']=q.get('tests_status')
+                              attempt['test_output_sha256']=sha(folder/'verifier/test_output.log') if (folder/'verifier/test_output.log').exists() else None
+                              expected=1.0 if agent=='oracle' else 0.0
+                              attempt['status']='expected_semantic_result' if v==expected and q.get('valid_test_output') and not r.get('exception_info') and (r.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                          else:attempt['status']='missing_exported_grading_evidence'
+                  except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                  except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                  attempt['seconds']=round(time.monotonic()-before,2);summary['attempts'].append(attempt)
+                  if attempt['status']!='expected_semantic_result':break
+              summary['status']='completed_attempts'
+          except Exception as exc:
+              summary.update(status='blocked',stage=stage,error_type=type(exc).__name__)
+          finally:
+              if events:
+                  events.terminate()
+                  try:events.wait(timeout=5)
+                  except subprocess.TimeoutExpired:events.kill()
+              if event_file:event_file.close()
+              log=private/'docker-events.jsonl'
+              event_text=log.read_text(errors='replace') if log.exists() else ''
+              summary['observed_deny_all_exec_events']=sum('deny-all' in line and 'exec_create' in line for line in event_text.splitlines())
+              summary['verifier_isolation_evidence']='stock_pinned_Harbor_policy_transition_observed' if summary['observed_deny_all_exec_events'] else 'not_observed_do_not_claim_acceptance'
+              summary['seconds']=round(time.monotonic()-start,2)
+              # Public output is strictly this bounded scalar/per-test summary. Raw logs stay ephemeral.
+              print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+              with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+                  f.write('## Lighthouse1549 exact-adapter Harbor diagnostic\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          PY
