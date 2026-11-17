@@ -1,0 +1,124 @@
+name: One-shot pinned Harbor two Lighthouse tasks
+on:
+  push:
+    branches: [diagnostic/lighthouse10176-10295-harbor-20261117]
+    paths: [.github/workflows/lighthouse-two-harbor-e2e.yml]
+permissions:
+  contents: read
+concurrency:
+  group: lighthouse-two-harbor-once-20261117
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Two exact-adapter oracle and no-op pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,platform,shutil,subprocess,time,urllib.request
+          P=pathlib.Path
+          start=time.monotonic();private=P('private-run-data');private.mkdir()
+          adapter='020529b6433a3c045a09c76dee281489eca474a4';harbor='1e5c5c6db929a10a140d05e606882c671ae20729';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+          cases=[{'id': '10176', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-10176@sha256:20f94e02ff408f1d68190bc111918225c06d6e1bce5a2756824a5bfbef1126bd', 'inputs': {'task.yaml': '34f996cee987a516948231b017cc8983c629d2a5534ab18d917defe3617d8bbb', 'eval.sh': 'd0b36b59a62a37edc11305408d39efc2bed3c79dcfaf068b417a2487e896c867', 'gold.patch': '280ae37886cbba613523a7984f1851e724f8fbc1e1f43b17649f45f1ccd81bb6', 'tests.json': 'bee10dfefc86aebff3efff4270740d348ded25c0141f2d9fb8aabbd7cddb3106', 'problem_statement.md': '45b6ecd56cbd435573a17df1a9afba0a55f23fab79b1a71385215e9a6f3adb7c', 'problem_assets/0-67442906-7c9d1380-f5b7-11e9-9449-e93d77734fb2.png': 'e6c71dadff45632955a2999be224ec0c2125504aed219b9633d1f31329e09100', 'problem_assets/1-67443023-f92ff200-f5b7-11e9-9d58-39d1a4985ffa.png': '511469b0d99031fa9106fb3bea2ef3ba8b8fed2a715559e869826c08693459b9'}}, {'id': '10295', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-10295@sha256:b032a9bb61637c9238409094655e2063e0a5ae7d3124ab0f0688072f23884129', 'inputs': {'task.yaml': 'a211fe119684366cba2e53089cc217630c7ce561f34bbfc8d189265f2eb42a9c', 'eval.sh': 'c6f0556b0d52eb115d4ed4ee196c33c975596d61b62a8729b789bc496155cd95', 'gold.patch': 'd52580a49755fc3cb98dd42f8ea4e961569383649fa010d34f1768dde17a53ad', 'tests.json': 'fe5bac7b6ffb0ab50e7ee761efe0668600bba66d871068765630846c93b0b768', 'problem_statement.md': 'dfcab04555545cc5bc80c8f1f7ff64f370026bfd8be5f05547911b9f5c971de9', 'problem_assets/0-73780219-e6929080-4742-11ea-86be-24c7a9d875ed.png': '966286f7a8e4c13cb5a7e79622afc6c3de43077e4fb06a0eb186b96674e4ff19'}}]
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Two exact-adapter stock-Harbor diagnostics, not full25 or model parity','attempts':[]}
+          stage='setup'
+          def execute(argv,timeout=120,cwd=None):
+              with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+              if p.returncode:raise RuntimeError('command_nonzero')
+          def checkout(repo,commit,dest):
+              execute(['git','init','-q',dest]);execute(['git','-C',dest,'fetch','--depth','1',repo,commit],180);execute(['git','-C',dest,'checkout','--detach','FETCH_HEAD'])
+              assert subprocess.check_output(['git','-C',dest,'rev-parse','HEAD'],text=True).strip()==commit
+          def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+          def ids(kind):
+              cmd=['docker','ps','-aq'] if kind=='containers' else ['docker','image','ls','-q','--no-trunc']
+              return set(subprocess.check_output(cmd,text=True).split())
+          def cleanup_containers(before):
+              for cid in ids('containers')-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+          setup_ok=False
+          try:
+              assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+              execute(['docker','compose','version'])
+              stage='checkout';checkout('https://github.com/joe1chief/adapters.git',adapter,'adapter-source');checkout('https://github.com/harbor-framework/harbor.git',harbor,'harbor-source')
+              stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.8.22'],120)
+              execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+              py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');setup_ok=True
+          except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
+          for case in cases:
+              n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
+              case_summary={'task':n,'image':image,'source_sha256':case['inputs']};summary.setdefault('cases',[]).append(case_summary)
+              try:
+                  if not setup_ok:raise RuntimeError('setup_incomplete')
+                  if time.monotonic()-start>23*60:raise TimeoutError('budget')
+                  if shutil.disk_usage('.').free<7*1024**3:raise OSError('insufficient_disk')
+                  stage='public_inputs';td=P('task-source')/('GoogleChrome__lighthouse-'+n);td.mkdir(parents=True)
+                  for name,digest in case['inputs'].items():
+                      dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                      url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/GoogleChrome__lighthouse-'+n+'/'+name
+                      with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                      assert sha(dest)==digest
+                  meta=td/'task.yaml';text=meta.read_text();old='image: swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-'+n+':latest';assert text.count(old)==1;meta.write_text(text.replace(old,'image: '+image))
+                  stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+                  with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','GoogleChrome__lighthouse-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
+                  task=P('generated/googlechrome-lighthouse-'+n).resolve();assert task.is_dir()
+                  for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/tests.json','tests.json')]:assert sha(task/generated)==case['inputs'][original]
+                  case_summary['task_toml_sha256']=sha(task/'task.toml')
+                  stage='pull_fixed_image';execute(['docker','pull','--platform','linux/amd64',image],150)
+                  detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert detail['Architecture']=='amd64' and detail['Os']=='linux';case_summary['image_id']=detail['Id'];case_ok=True
+              except Exception as exc:case_summary.update(status='case_preflight_blocked',stage=stage,error_type=type(exc).__name__)
+              for agent in ['oracle','nop']:
+                  attempt={'task':n,'agent':agent,'fresh_harbor_execution':False};summary['attempts'].append(attempt)
+                  if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
+                  if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
+                  name='lighthouse'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                  try:
+                      ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
+                      attempt['fresh_harbor_execution']=True
+                      # Keep only these ephemeral task containers for post-verifier dependency inspection.
+                      # Stock task config, egress helper and criteria remain unchanged.
+                      with (private/(name+'.log')).open('wb') as f:r=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=f,stderr=f,timeout=300)
+                      attempt['cli_exit']=r.returncode;folder=P('trials')/name
+                      if (folder/'result.json').is_file():
+                          result=json.loads((folder/'result.json').read_text());attempt['exception_type']=(result.get('exception_info') or {}).get('exception_type');attempt['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+                          report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                          if report.is_file() and reward.is_file():
+                              q=json.loads(report.read_text());v=float(reward.read_text().strip());expected=1.0 if agent=='oracle' else 0.0
+                              attempt.update(reward=v,resolved=q.get('resolved'),valid_test_output=q.get('valid_test_output'),per_test=q.get('tests_status'))
+                              attempt['status']='expected_semantic_result' if v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                          else:attempt['status']='missing_exported_grading_evidence'
+                      else:attempt['status']='missing_harbor_result'
+                      output=folder/'verifier/test_output.log'
+                      if output.exists():
+                          attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
+                  except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                  except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                  finally:
+                      # Read JSON only, do not load dependency code or call npm/yarn beyond original eval.
+                      dependency=[]
+                      for cid in ids('containers')-before:
+                          dest=private/(name+'-'+cid[:12]+'-package.json')
+                          copied=subprocess.run(['docker','cp',cid+':/testbed/node_modules/js-library-detector/package.json',str(dest)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+                          if copied.returncode==0:
+                              try:pkg=json.loads(dest.read_text());dependency.append({'name':pkg.get('name'),'version':pkg.get('version'),'package_json_sha256':sha(dest)})
+                              except Exception:pass
+                      attempt['post_verifier_dependency_inventory']=dependency
+                      attempt['dependency_alignment']='not_claimed'
+                      if n=='10176' and agent=='oracle' and dependency:
+                          attempt['dependency_alignment']='expected_locked_5.7.0_present' if all(x['version']=='5.7.0' for x in dependency) else 'gold_lock_version_mismatch_even_if_tests_pass'
+                      if events:
+                          events.terminate()
+                          try:events.wait(timeout=5)
+                          except subprocess.TimeoutExpired:events.kill()
+                      if ef:ef.close()
+                      ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                      attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
+                      cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
+              if setup_ok:
+                  for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+          summary['seconds']=round(time.monotonic()-start,2)
+          assert len(summary['attempts'])==4
+          print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## Two-task exact-adapter Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full25 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          PY
