@@ -1,0 +1,148 @@
+name: One-shot isolated OpenLayers 13333
+on:
+  push:
+    branches: [diagnostic/openlayers13333-isolated-20261117]
+    paths: [.github/workflows/openlayers13333-isolated.yml]
+permissions:
+  contents: read
+concurrency:
+  group: openlayers13333-isolated-20261117
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Original oracle and no-op with private references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,subprocess,json,hashlib,os,time,shutil,platform,urllib.request
+          P=pathlib.Path
+          start=time.monotonic(); private=P('private-run-data');private.mkdir()
+          ADAPTER='020529b6433a3c045a09c76dee281489eca474a4'
+          HARBOR='1e5c5c6db929a10a140d05e606882c671ae20729'
+          SOURCE='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+          IMAGE='swebench/sweb.eval.x86_64.openlayers_1776_openlayers-13333@sha256:cbef87db35606034cac087c1cde06f626452f0ea5ec27b3f2c0887ffd29f35b6'
+          INPUTS={'Dockerfile': '0b19d6b9315da1b2d541ffafdd0892c507359ff8ef1bfe5a58825bc497e2d7ae', 'eval.sh': '7043bc8c14be79077d5201921abc13307dd8a52cb259ee7e2a291214a3633127', 'gold.patch': '627ff8181569650937a23a932b61d721a1c77502c8f3413e49b0860005a6392b', 'problem_assets/0-150269611-5ce2b3c1-6875-4d28-9496-5757e2845eb6.png': '0af7bbd52aa2c70ca287407a0c9b6125a25d458a71a82c806b6cb9680f730b85', 'problem_assets/1-150269629-0c04c806-af7c-4c83-9f7b-3056fa3dc7c8.jpg': 'deb335114e12b785f6787e43c1554998495451a66095ebb966e64429da454e84', 'problem_assets/2-150269637-aa61aeb8-6ebe-4446-9005-ee107ed76abc.jpg': '8b9ec653b5c1ac3b42816c9f92a4284a3608ef1cfe622f6adb345eef2ad01ca7', 'problem_assets/3-150269952-528df1c0-6e4c-469f-9ba6-f3e7ff62c66e.jpg': '7ebfd891fc968bd3098b2d73c73be4be33cf7c548ca7bc9c66e7d8b9969e20ba', 'problem_statement.md': '37e6e8a43228b15f5ed5b88c5696ef3ac20d29c330d2a5e5d476ca826c9cb74d', 'task.yaml': 'dacf93ff763e16283ebeee0f43060ba815a7b97ba7a88649ce7f5806d556de84', 'test.patch': '50965946d23621d18c7c2617226860f2a0ea350f66960cdf7da59631dd6ead2f', 'test_assets/test/rendering/cases/webgl-layer-extent/expected.png': '0a7b46ecbd65d89f20c75b1794e25d09b11697a0cac7ba5d36b45013ace676f7', 'test_assets/test/rendering/cases/webgl-source-extent/expected.png': '75aaafe699ed81b9f2c74e93b08304675cfa7c8ee72d012d13e4e8ca707a25d6', 'tests.json': '6c0363444c6019d61c3ece566c60be4101f324fe7e160bbad68284cee84d3e81'}
+          HELPERS={'test.sh': "#!/bin/bash\nset -euo pipefail\n\nmkdir -p /logs/verifier\nrm -f /logs/verifier/reward.json /logs/verifier/reward.txt /logs/verifier/metrics.json /logs/verifier/report.json /logs/verifier/eval.instrumented.sh /logs/verifier/restored-assets.json /logs/verifier/extent-comparisons.json\nprintf '0\\n' > /logs/verifier/reward.txt\npython3 /tests/stage_and_observe.py prepare\ncd /testbed\nset +e\nbash /logs/verifier/eval.instrumented.sh > /logs/verifier/test_output.log 2>&1\nset -e\npython3 /tests/stage_and_observe.py verify-result\npython3 /tests/grade.py /logs/verifier\n", 'stage_and_observe.py': 'import argparse\nimport hashlib\nimport json\nimport re\nimport subprocess\nfrom pathlib import Path\n\nfrom verify_assets import ASSETS, LINE, comparison_evidence, stage, verify\n\nOFFICIAL_EVAL_SHA256 = "7043bc8c14be79077d5201921abc13307dd8a52cb259ee7e2a291214a3633127"\nRESTORE = b"test -d /swebench/image_assets/test_patch && cp -a /swebench/image_assets/test_patch/. /testbed/ 2>/dev/null || true\\n"\nOBSERVE = b"python3 /tests/stage_and_observe.py postrestore || exit 1\\n"\nSTAGING = Path("/swebench/image_assets/test_patch")\nAGENT_CHECKOUT = Path("/testbed")\nTESTS = Path("/tests")\nLOG_DIR = Path("/logs/verifier")\n\n\ndef sha(data):\n    return hashlib.sha256(data).hexdigest()\n\n\ndef instrument(source, expected=OFFICIAL_EVAL_SHA256):\n    if sha(source) != expected or source.count(RESTORE) != 1:\n        raise ValueError("unrecognized official eval or restore site")\n    start = b": \'>>>>> Start Test Output\'"\n    if source.count(start) != 1 or source.index(RESTORE) > source.index(start):\n        raise ValueError("restore is not before test start")\n    return source.replace(RESTORE, RESTORE + OBSERVE, 1)\n\n\ndef postrestore(output=LOG_DIR / "restored-assets.json", checkout=AGENT_CHECKOUT):\n    entries = verify(checkout)\n    evidence = {n: ASSETS[Path(n)] for n in entries}\n    with output.open("x") as stream:\n        json.dump(evidence, stream)\n    return evidence\n\n\ndef official_f2p_observation(text):\n    rows = []\n    for line in text.splitlines():\n        if "cases/icon-opacity/main.js" not in line:\n            continue\n        match = LINE.search(line)\n        if match is not None and match["case"] == "icon-opacity":\n            rows.append(match["result"])\n        elif re.search(r"\\bcase .*cases/icon-opacity/main\\.js", line):\n            raise ValueError("unrecognized or skipped icon-opacity observation")\n    if len(rows) != 1:\n        raise ValueError("missing or duplicate icon-opacity observation")\n    return rows[0]\n\n\ndef check_output(log_path, postrestore_path):\n    seen = json.loads(postrestore_path.read_text())\n    if seen != {str(p): value for p, value in ASSETS.items()}:\n        raise ValueError("invalid or missing post-restore hashes")\n    raw = log_path.read_bytes()\n    txt = re.sub(r"\\x1b\\[[0-?]*[ -/]*[@-~]", "", raw.decode(errors="replace"))\n    return {"named_rendering_comparisons": comparison_evidence(txt), "official_f2p_render_observation": official_f2p_observation(txt), "raw_sha256": sha(raw)}\n\n\ndef main():\n    mode = argparse.ArgumentParser()\n    mode.add_argument("phase", choices=("prepare", "postrestore", "verify-result"))\n    args = mode.parse_args()\n    if args.phase == "prepare":\n        for root in (AGENT_CHECKOUT, STAGING):\n            for rel in ASSETS:\n                candidate = root / rel\n                if candidate.exists() or candidate.is_symlink():\n                    raise ValueError("reference readable before verifier staging")\n        tree = subprocess.run(["git", "-c", "safe.directory=/testbed", "-C", str(AGENT_CHECKOUT), "ls-tree", "HEAD", "--"] + [str(p) for p in ASSETS], capture_output=True, check=True)\n        if tree.stdout.strip():\n            raise ValueError("reference tracked in checked-out Git tree")\n        (LOG_DIR / "before-stage-absence.json").write_text(json.dumps({"two_checkout_paths_absent": True, "two_staging_paths_absent": True, "checked_out_git_tree_absent": True}))\n        original = (TESTS / "eval.sh").read_bytes()\n        rendered = instrument(original)\n        stage(TESTS / "private_assets", STAGING)\n        with (LOG_DIR / "eval.instrumented.sh").open("xb") as target:\n            target.write(rendered)\n    elif args.phase == "postrestore":\n        postrestore()\n    else:\n        result = check_output(LOG_DIR / "test_output.log", LOG_DIR / "restored-assets.json")\n        with (LOG_DIR / "extent-comparisons.json").open("x") as target:\n            json.dump(result, target)\n\n\nif __name__ == "__main__":\n    main()\n', 'verify_assets.py': 'import argparse\nimport hashlib\nimport os\nimport re\nfrom pathlib import Path\n\nCASES = {\n    "webgl-layer-extent": "0a7b46ecbd65d89f20c75b1794e25d09b11697a0cac7ba5d36b45013ace676f7",\n    "webgl-source-extent": "75aaafe699ed81b9f2c74e93b08304675cfa7c8ee72d012d13e4e8ca707a25d6",\n}\nASSETS = {Path("test/rendering/cases") / case / "expected.png": digest for case, digest in CASES.items()}\nLINE = re.compile(r"\\bcase (?:\\./)?cases/(?P<case>[a-z0-9-]+)/main\\.js(?: \\([^\\r\\n]*\\))?\'?: (?P<result>ok|mismatch [0-9.eE+\\-]+)\\s*$")\n\n\ndef checked_path(root, rel):\n    current = root\n    if current.is_symlink():\n        raise ValueError("symlink root")\n    for part in rel.parts:\n        current = current / part\n        if current.is_symlink():\n            raise ValueError("symlink component")\n    return current\n\n\ndef verify(root):\n    for rel, digest in ASSETS.items():\n        p = checked_path(root, rel)\n        if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != digest:\n            raise ValueError(f"missing or wrong bytes: {rel}")\n    return sorted(map(str, ASSETS))\n\n\ndef stage(source, target):\n    verify(source)\n    if os.path.lexists(target):\n        raise ValueError("stage destination must not exist")\n    target.mkdir()\n    for rel in ASSETS:\n        src = checked_path(source, rel)\n        dest = checked_path(target, rel)\n        dest.parent.mkdir(parents=True, exist_ok=True)\n        with dest.open("xb") as out:\n            out.write(src.read_bytes())\n    return verify(target)\n\n\ndef comparison_evidence(log):\n    found = {}\n    for line in log.splitlines():\n        match = LINE.search(line)\n        if match is None or match["case"] not in CASES:\n            continue\n        ident = match["case"]\n        if ident in found:\n            raise ValueError(f"duplicate case evidence: {ident}")\n        found[ident] = match["result"]\n    if set(found) != set(CASES):\n        raise ValueError("missing fresh named comparisons")\n    return found\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument("source", type=Path)\n    parser.add_argument("target", type=Path)\n    args = parser.parse_args()\n    for path in stage(args.source, args.target):\n        print(path)\n\n\nif __name__ == "__main__":\n    main()\n'}
+          PROBE="import pathlib,subprocess,json\nrels=['test/rendering/cases/webgl-layer-extent/expected.png','test/rendering/cases/webgl-source-extent/expected.png']\nfor root in ['/testbed','/swebench/image_assets/test_patch']:\n for rel in rels:\n  p=pathlib.Path(root)/rel\n  assert not p.exists() and not p.is_symlink(), 'test_reference_present'\np=subprocess.run(['git','-c','safe.directory=/testbed','-C','/testbed','ls-tree','HEAD','--']+rels,capture_output=True,check=True)\nassert not p.stdout.strip(), 'test_reference_in_git_tree'\nprint(json.dumps({'checkout_absent':True,'staging_absent':True,'git_tree_absent':True}))\n"
+          summary={'task':'openlayers__openlayers-13333','adapter':ADAPTER,'harbor':HARBOR,'source':SOURCE,'image':IMAGE,'model_calls':0,'scope':'isolated reference assets diagnostic; original scoring and tests unchanged','attempts':[]}
+          stage='setup';ready=False
+          sha=lambda p:hashlib.sha256(P(p).read_bytes()).hexdigest()
+          def command(args,timeout=120,cwd=None):
+           with (private/'setup.log').open('ab') as log:
+            p=subprocess.run(args,cwd=cwd,stdout=log,stderr=log,timeout=timeout)
+           if p.returncode:raise RuntimeError('command_nonzero')
+          def checkout(url,commit,path):
+           command(['git','init','-q',path]);command(['git','-C',path,'fetch','--depth','1',url,commit],180);command(['git','-C',path,'checkout','--detach','FETCH_HEAD'])
+           assert subprocess.check_output(['git','-C',path,'rev-parse','HEAD'],text=True).strip()==commit
+          def containers():return set(subprocess.check_output(['docker','ps','-aq'],text=True).split())
+          def category(text):
+           text=text.lower()
+           for label,words in [('sandbox_or_permission',['sandbox','operation not permitted','permission denied']),('image_resolution',['failed to resolve','pull access denied']),('disk',['no space left']),('timeout',['timeout','timed out']),('browser_start',['chrome failed','failed to launch'])]:
+            if any(w in text for w in words):return label
+           return 'unclassified'
+          try:
+           assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+           command(['docker','compose','version'])
+           stage='checkout';checkout('https://github.com/joe1chief/adapters.git',ADAPTER,'adapter');checkout('https://github.com/harbor-framework/harbor.git',HARBOR,'harbor')
+           stage='dependencies';command(['python3','-m','venv','bootstrap']);command(['bootstrap/bin/pip','install','uv==0.8.22'],120);command([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor')
+           assert sha('harbor/uv.lock')=='ce2eed59946e8f0d21494c0115939e8169d1362e46d92d5db377861303192b01'
+           py=str(P('harbor/.venv/bin/python').resolve());cli=str(P('harbor/.venv/bin/harbor').resolve())
+           stage='public_inputs';src=P('source/openlayers__openlayers-13333');src.mkdir(parents=True)
+           for name,digest in INPUTS.items():
+            target=src/name;target.parent.mkdir(parents=True,exist_ok=True)
+            with urllib.request.urlopen('https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+SOURCE+'/tasks/openlayers__openlayers-13333/'+name,timeout=40) as response:target.write_bytes(response.read())
+            assert sha(target)==digest
+           env=dict(os.environ,PYTHONPATH=str(P('adapter/src/swebench-multimodal/src').resolve()))
+           stage='generate';
+           with (private/'generate.log').open('wb') as log:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','source','--output-dir','generated','--task-ids','openlayers__openlayers-13333'],env=env,stdout=log,stderr=log,check=True,timeout=60)
+           task=P('generated/openlayers-openlayers-13333').resolve();tests=task/'tests'
+           for name in ['eval.sh','test.patch','tests.json']:assert sha(tests/name)==INPUTS[name]
+           assert sha(task/'solution/gold.patch')==INPUTS['gold.patch']
+           truth=json.loads((tests/'tests.json').read_text());assert truth=={'FAIL_TO_PASS':["./cases/icon-opacity/main.js'"],'PASS_TO_PASS':[]}
+           for name,data in HELPERS.items():(tests/name).write_text(data)
+           rels=['test/rendering/cases/webgl-layer-extent/expected.png','test/rendering/cases/webgl-source-extent/expected.png']
+           for rel in rels:
+            dest=tests/'private_assets'/rel;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((src/'test_assets'/rel).read_bytes())
+           df=task/'environment/Dockerfile';lines=df.read_text().splitlines();lines[0]='FROM '+IMAGE
+           files=[base+'/'+rel for base in ['/swebench/image_assets/test_patch','/testbed'] for rel in rels]
+           lines+=['RUN rm -f -- '+' '.join(files)]
+           parents=sorted({p for rel in rels for p in P(rel).parents if p!=P('.')},key=lambda p:(-len(p.parts),str(p)))
+           lines+=['RUN rmdir -- '+' '.join('/swebench/image_assets/test_patch/'+str(p) for p in parents)+' /swebench/image_assets/test_patch']
+           df.write_text('\n'.join(lines)+'\n')
+           summary['generated_dockerfile_sha256']=sha(df);summary['official_eval_sha256']=sha(tests/'eval.sh')
+           stage='pull';command(['docker','pull','--platform','linux/amd64',IMAGE],180)
+           tag='harbor13333-isolated:run-'+os.environ['GITHUB_RUN_ID'];stage='isolated_build';command(['docker','build','--platform','linux/amd64','-t',tag,str(task/'environment')],180)
+           detail=json.loads(subprocess.check_output(['docker','image','inspect',tag],text=True))[0];assert detail['Architecture']=='amd64';summary['derived_image_id']=detail['Id']
+           # Harbor builds from this exact local tag; FROM-only preserves the verified image content ID.
+           df.write_text('FROM '+tag+chr(10));summary['harbor_from_only_dockerfile_sha256']=sha(df)
+           stage='before_agent_visibility';proof=subprocess.check_output(['docker','run','--rm','--network','none','--entrypoint','python3',tag,'-c',PROBE],timeout=30,text=True);summary['before_agent_same_environment_probe']=json.loads(proof)
+           ready=True
+          except Exception as exc:
+           raw=(private/'setup.log').read_text(errors='replace')[-12000:] if (private/'setup.log').exists() else ''
+           summary['first_failure']={'stage':stage,'type':type(exc).__name__,'category':category(raw),'private_log_sha256':sha(private/'setup.log') if (private/'setup.log').exists() else None}
+          for agent in ['oracle','nop']:
+           a={'agent':agent,'fresh_execution':False};summary['attempts'].append(a)
+           if not ready:a['status']='not_run_preflight_failed';continue
+           if time.monotonic()-start>22*60:a['status']='not_run_budget';continue
+           before=containers();events=None;eventfile=None;began=time.monotonic();name='openlayers13333-'+agent;folder=P('trials')/name
+           try:
+            eventfile=(private/(name+'-events')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=eventfile,stderr=subprocess.DEVNULL)
+            assert json.loads(subprocess.check_output(['docker','image','inspect',tag],text=True))[0]['Id']==summary['derived_image_id']
+            a['fresh_execution']=True;a['stage']='harbor_trial'
+            with (private/(name+'.log')).open('wb') as log:p=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=log,stderr=log,timeout=480)
+            a['cli_exit']=p.returncode
+            if (folder/'result.json').is_file():
+             result=json.loads((folder/'result.json').read_text());a['exception_type']=(result.get('exception_info') or {}).get('exception_type');a['error_category']=category(json.dumps(result.get('exception_info'))) if result.get('exception_info') else None;a['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+            for file,key in [('report.json','official_report'),('extent-comparisons.json','supplemental_render_comparisons'),('before-stage-absence.json','before_staging_visibility'),('restored-assets.json','after_restore_hashes')]:
+             if (folder/'verifier'/file).is_file():a[key]=json.loads((folder/'verifier'/file).read_text())
+            log=folder/'verifier/test_output.log'
+            if log.is_file():a['test_output_sha256']=sha(log);a['runtime_error_category']=category(log.read_text(errors='replace')[-12000:])
+            reward=folder/'verifier/reward.txt'
+            if reward.is_file():a['reward']=float(reward.read_text().strip())
+            a['status']='observed'
+           except Exception as exc:
+            a.update(status='infrastructure_failure',error_type=type(exc).__name__)
+            log=private/(name+'.log');a['private_launcher_log_sha256']=sha(log) if log.is_file() else None
+            a['error_category']=category(log.read_text(errors='replace')[-12000:]) if log.is_file() else 'unclassified'
+            summary.setdefault('first_failure',{'stage':a.get('stage'),'agent':agent,'type':type(exc).__name__,'category':a['error_category']})
+           finally:
+            if events:
+             events.terminate()
+             try:events.wait(timeout=5)
+             except subprocess.TimeoutExpired:events.kill()
+            if eventfile:eventfile.close()
+            ef=private/(name+'-events');a['deny_all_exec_events']=sum('deny-all' in l and 'exec_create' in l for l in (ef.read_text(errors='replace').splitlines() if ef.exists() else []))
+            new_containers=containers()-before
+            runtime_images=[];runtime_containment=[]
+            for cid in new_containers:
+             info=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]
+             if info.get('Config',{}).get('WorkingDir')=='/testbed':
+              runtime_images.append(info['Image']);hc=info.get('HostConfig') or {};runtime_containment.append({'not_privileged':hc.get('Privileged') is False,'no_added_caps':not hc.get('CapAdd'),'not_host_network':hc.get('NetworkMode')!='host'})
+            a['actual_runtime_image_ids']=runtime_images
+            a['same_verified_image']=runtime_images==[summary['derived_image_id']]
+            a['task_containment']=runtime_containment
+            for cid in containers()-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+            a['seconds']=round(time.monotonic()-began,2)
+            q=a.get('official_report') or {};want=1 if agent=='oracle' else 0;comp=(a.get('supplemental_render_comparisons') or {}).get('named_rendering_comparisons',{})
+            truth="./cases/icon-opacity/main.js'"
+            statuses=q.get('tests_status') or {};f=statuses.get('FAIL_TO_PASS') or {};p=statuses.get('PASS_TO_PASS') or {}
+            official_exact=(f.get('success')==([truth] if agent=='oracle' else []) and f.get('failure')==([] if agent=='oracle' else [truth]) and p.get('success')==[] and p.get('failure')==[])
+            hashes={'test/rendering/cases/webgl-layer-extent/expected.png':'0a7b46ecbd65d89f20c75b1794e25d09b11697a0cac7ba5d36b45013ace676f7','test/rendering/cases/webgl-source-extent/expected.png':'75aaafe699ed81b9f2c74e93b08304675cfa7c8ee72d012d13e4e8ca707a25d6'}
+            observed=(a.get('supplemental_render_comparisons') or {}).get('official_f2p_render_observation')
+            a['official_f2p_render_observation']=observed
+            actual_f2p=(observed=='ok') if agent=='oracle' else isinstance(observed,str) and observed.startswith('mismatch ')
+            a['official_exact_statuses']=official_exact
+            a['exact_postrestore_hashes']=a.get('after_restore_hashes')==hashes
+            a['same_render_log']=(a.get('supplemental_render_comparisons') or {}).get('raw_sha256')==a.get('test_output_sha256') and bool(a.get('test_output_sha256'))
+            a['complete_evidence']=bool(a.get('cli_exit')==0 and not a.get('exception_type') and q.get('valid_test_output') is True and q.get('resolved') is (agent=='oracle') and a.get('reward')==want and (a.get('harbor_rewards') or {}).get('reward')==want and a.get('before_staging_visibility')=={'two_checkout_paths_absent':True,'two_staging_paths_absent':True,'checked_out_git_tree_absent':True} and a['exact_postrestore_hashes'] and set(comp)=={'webgl-layer-extent','webgl-source-extent'} and a['same_render_log'] and a['deny_all_exec_events']>0 and a['same_verified_image'] and runtime_containment==[{'not_privileged':True,'no_added_caps':True,'not_host_network':True}] and official_exact and actual_f2p)
+            if not a['complete_evidence']:summary.setdefault('first_failure',{'stage':'required_evidence_gate','agent':agent,'type':'missing_or_mismatched_evidence','category':a.get('error_category') or a.get('runtime_error_category')})
+          
+          summary['seconds']=round(time.monotonic()-start,2);summary['diagnostic_accepted']=all(a.get('complete_evidence',False) for a in summary['attempts']);summary['failure_marker']=None if summary['diagnostic_accepted'] else 'DIAGNOSTIC_NOT_ACCEPTED'
+          print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## 13333 isolated diagnostic, no model parity\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          if not summary['diagnostic_accepted']:raise SystemExit(1)
+          PY
