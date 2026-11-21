@@ -21,7 +21,7 @@ jobs:
           import hashlib,json,os,pathlib,tomllib,platform,shutil,subprocess,time,urllib.request
           P=pathlib.Path
           start=time.monotonic();private=P('private-run-data');private.mkdir()
-          adapter='020529b6433a3c045a09c76dee281489eca474a4';harbor='3cb627394b95d3ae605f31e0d694edf508cf4b7b';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+          adapter='020529b6433a3c045a09c76dee281489eca474a4';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
           cases=[{'id': '2061', 'image': 'swebench/sweb.eval.x86_64.grommet_1776_grommet-2061@sha256:0fee0191d949f36b76327594ce4dd26200fa4fdbe1198838e62f0b8f909e299f', 'inputs': {'test.patch': 'a32a2d052bb7ed80c43a61d308b6619fa9c00da6e317261c31ac9cc24e0b6a2e', 'problem_statement.md': '70018808a6a7c537ebe63e5d328ccd3e3f1cb77cebe9b9dc330fdbc925b86916', 'eval.sh': '740ca83b10f1f138ab71041cdcda5c66f5a4e32c1913868af38e42440469b80e', 'tests.json': '074592f772eba264af0360a7e295dd5202a3b5bfd6ca8c0529a0d7c334e81bac', 'Dockerfile': '113c7af5c585b9ba4ea9bf3f397ecbbd2c40ee2269df247d6f6d82daf4302470', 'gold.patch': '01d722cb72d3fbc9437611694f3a6b52a941d07cf1e308b07c3e8398ac72f10d', 'task.yaml': '3bcc0a2032012dac7d08c03977fa84ce4856aa85374929487c4626acfa94bd79', 'problem_assets/1-38843203-e689b1b0-41bb-11e8-87ca-5b9c727300e8.jpg': '15a2c34122b04725a528b15f32868ee094aa267b3ef122331afff36388b44f88', 'problem_assets/0-38843188-d0a0325c-41bb-11e8-8357-c686034af89d.jpg': '12e3f10646b83283adf5ead750f2788172b823c11300ef8f97274a01386d0b43'}}]
           summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Grommet 2061 original oracle/nop only, not full480 or model parity','attempts':[]}
           migration='diff -ruN a/adapter.py b/adapter.py\n--- a/adapter.py\n+++ b/adapter.py\n@@ -248,6 +248,8 @@\n \n         src_folder = self.tasks_by_id[instance_id]\n         meta = self.task_metadata[instance_id]\n+        if not re.fullmatch(r"[0-9a-f]{40}", str(meta.get("base_commit", ""))):\n+            raise ValueError("Missing or invalid upstream base_commit")\n         task_name = self._task_name(instance_id)\n         task_dir = self.output_dir / task_name\n         for filename in ("gold.patch", "eval.sh", "tests.json", "problem_statement.md"):\n@@ -313,7 +315,7 @@\n             shutil.copy2(TEMPLATE_DIR / "tests" / "test.sh", tests_dir / "test.sh")\n             (tests_dir / "test.sh").chmod(0o755)\n \n-            for filename in ("grade.py", "upstream.py", "SWEBENCH_LICENSE"):\n+            for filename in ("grade.py", "upstream.py", "SWEBENCH_LICENSE", "apply_submission.py"):\n                 shutil.copy2(TEMPLATE_DIR / "tests" / filename, tests_dir / filename)\n             for key in ("log_parser", "eval_type", "version"):\n                 if key not in meta:\n@@ -384,6 +386,7 @@\n                 .replace("{repo}", meta.get("repo", "unknown"))\n                 .replace("{version}", str(meta.get("version", "latest")))\n                 .replace("{split}", str(meta.get("split", "test")))\n+                .replace("{base_commit}", meta["base_commit"])\n             )\n             (staging_dir / "task.toml").write_text(task_toml_content, encoding="utf-8")\n \ndiff -ruN a/task-template/task.toml b/task-template/task.toml\n--- a/task-template/task.toml\n+++ b/task-template/task.toml\n@@ -1,4 +1,5 @@\n schema_version = "1.0"\n+artifacts = ["/tmp/harbor-submission/model.patch"]\n \n [task]\n name = "swebench-multimodal/{task_name}"\n@@ -25,9 +26,14 @@\n split = "{split}"\n \n [verifier]\n+environment_mode = "separate"\n network_mode = "no-network"\n timeout_sec = 1800.0\n \n+[[verifier.collect]]\n+command = """bash -ec \'mkdir -p /tmp/harbor-submission; rm -f /tmp/harbor-submission/model.patch; cd /testbed; git -c safe.directory=/testbed add -N -- . ":!problem_assets"; git -c safe.directory=/testbed diff --binary {base_commit} -- . ":!problem_assets" > /tmp/harbor-submission/model.patch.tmp; mv /tmp/harbor-submission/model.patch.tmp /tmp/harbor-submission/model.patch\'"""\n+timeout_sec = 60.0\n+\n [agent]\n network_mode = "public"\n timeout_sec = 3600.0\ndiff -ruN a/task-template/tests/apply_submission.py b/task-template/tests/apply_submission.py\n--- a/task-template/tests/apply_submission.py\n+++ b/task-template/tests/apply_submission.py\n@@ -0,0 +1,23 @@\n+import hashlib\n+import json\n+import subprocess\n+from pathlib import Path\n+\n+\n+def apply_submission(repository, patch, metadata):\n+    base = metadata[\'base_commit\']\n+    head = subprocess.check_output([\'git\', \'-c\', \'safe.directory=\' + str(repository.resolve()), \'-C\', str(repository), \'rev-parse\', \'HEAD\'], text=True).strip()\n+    if head != base:\n+        raise ValueError(\'verifier base commit mismatch\')\n+    if not patch.is_file() or patch.is_symlink():\n+        raise ValueError(\'submission artifact missing or invalid\')\n+    data = patch.read_bytes()\n+    if data:\n+        subprocess.run([\'git\', \'-c\', \'safe.directory=\' + str(repository.resolve()), \'-C\', str(repository), \'apply\', \'--check\', str(patch.resolve())], check=True)\n+        subprocess.run([\'git\', \'-c\', \'safe.directory=\' + str(repository.resolve()), \'-C\', str(repository), \'apply\', str(patch.resolve())], check=True)\n+    return {\'submission_sha256\': hashlib.sha256(data).hexdigest(), \'submission_bytes\': len(data), \'base_commit\': base, \'empty_submission\': not data}\n+\n+\n+if __name__ == \'__main__\':\n+    evidence = apply_submission(Path(\'/testbed\'), Path(\'/tmp/harbor-submission/model.patch\'), json.loads(Path(\'/tests/task_metadata.json\').read_text()))\n+    Path(\'/logs/verifier/submission.json\').write_text(json.dumps(evidence))\ndiff -ruN a/task-template/tests/test.sh b/task-template/tests/test.sh\n--- a/task-template/tests/test.sh\n+++ b/task-template/tests/test.sh\n@@ -1,10 +1,10 @@\n #!/bin/bash\n-set -u\n+set -eu\n \n # Clean up any pre-existing or agent-forged reward files\n rm -f /logs/verifier/reward.json /logs/verifier/reward.txt /logs/verifier/metrics.json /logs/verifier/report.json\n mkdir -p /logs/verifier\n-echo 0 > /logs/verifier/reward.txt\n+python3 -I /tests/apply_submission.py\n \n cd /testbed\n set +e\n'
@@ -70,7 +70,7 @@ jobs:
               summary['migration_sha256']=migration_sha
               stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
               execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
-              py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='a539b95144b0c24715bf9fd36e3bb94d220404aa7aa0994f0561a24cd94ec00e';setup_ok=True
+              py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
           except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
           for case in cases:
               n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
@@ -106,6 +106,8 @@ jobs:
                   if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
                   if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
                   name='grommet'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                  folder=P('trials')/name
+                  attempt['log_recovery_accepted']=False
                   try:
                       ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
                       attempt['fresh_harbor_execution']=True
@@ -141,11 +143,11 @@ jobs:
                               f2p=q['tests_status']['FAIL_TO_PASS'];p2p=q['tests_status']['PASS_TO_PASS']
                               f2p_ok=(f2p['success']==declared['FAIL_TO_PASS'] and not f2p['failure']) if agent=='oracle' else (f2p['failure']==declared['FAIL_TO_PASS'] and not f2p['success'])
                               buckets_ok=f2p_ok and len(declared['FAIL_TO_PASS'])==3 and p2p['success']==declared['PASS_TO_PASS'] and len(p2p['success'])==36 and not p2p['failure']
-                              attempt['status']='expected_semantic_result' if evidence_ok and buckets_ok and v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                              attempt['status']='expected_semantic_result' if r.returncode==0 and evidence_ok and buckets_ok and v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
                           else:attempt['status']='missing_exported_grading_evidence'
                       else:attempt['status']='missing_harbor_result'
                       output=folder/'verifier/test_output.log'
-                      if output.exists():
+                      if output.is_file() and output.stat().st_size>0:
                           attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
                   except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
                   except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
@@ -158,15 +160,34 @@ jobs:
                       attempt['post_verifier_dependency_snapshots']=dependency
                       baseline=case_summary['baseline_dependency_snapshot']
                       containers=[]
+                      def copied_hash(container_id, source_path, name):
+                          target=private/name
+                          process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
+                          if process.returncode==0 and target.is_file() and not target.is_symlink():return (sha(target),False)
+                          return (None,process.returncode!=0 and 'could not find the file' in process.stderr.lower())
                       for cid in ids('containers')-before:
                           d=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]
                           labels=d['Config']['Labels'] or {}
                           project=labels.get('com.docker.compose.project','')
                           if labels.get('com.docker.compose.service')=='main' and project.startswith(name):
                               hc=d['HostConfig']
-                              containers.append({'id_prefix':cid[:12],'role':'verifier' if '__verifier__' in project else 'agent','image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts'])})
+                              role='verifier' if '__verifier__' in project else 'agent'
+                              log_match={}
+                              if role=='verifier':
+                                  for artifact in ('test_output.log','reward.txt','report.json','submission.json'):
+                                      exported=folder/'verifier'/artifact
+                                      digest,_=copied_hash(cid,'/logs/verifier/'+artifact,name+'-runtime-'+artifact)
+                                      log_match[artifact]=bool(digest and exported.is_file() and digest==sha(exported))
+                              control_hash,_=copied_hash(cid,'/testbed/package.json',name+'-'+role+'-control')
+                              probes={f:copied_hash(cid,'/tests/'+f,name+'-'+role+'-'+f) for f in ('test.sh','grade.py','tests.json','task_metadata.json')}
+                              if role=='agent':
+                                  correct_test_visibility=control_hash is not None and all(missing for _,missing in probes.values())
+                              else:
+                                  correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
+                              containers.append({'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
                       attempt['containers']=containers
-                      separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] for c in containers) and all((not c['tests_mount']) if c['role']=='agent' else c['verifier_log_mount'] for c in containers)
+                      separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
+                      attempt['log_recovery_accepted']=bool(attempt.get('test_output_sha256')) and any(c['role']=='verifier' and c['runtime_logs_match_export'] for c in containers)
                       attempt['separation_accepted']=separation
                       attempt['manifest_lock_unchanged']=len(dependency)==2 and all(baseline.get(k) is not None and all(s.get(k)==baseline[k] for s in dependency) for k in ['package_sha256','lock_sha256'])
                       attempt['integrity_record_unchanged']=len(dependency)==2 and baseline.get('integrity_sha256') is not None and all(s.get('integrity_sha256')==baseline['integrity_sha256'] for s in dependency)
@@ -178,8 +199,18 @@ jobs:
                           except subprocess.TimeoutExpired:events.kill()
                       if ef:ef.close()
                       ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                      def is_verifier_deny_event(line):
+                          try:event=json.loads(line)
+                          except ValueError:return False
+                          attributes=event.get('Actor',{}).get('Attributes',{})
+                          action=event.get('Action','')
+                          project=attributes.get('com.docker.compose.project','')
+                          container_name=attributes.get('name','')
+                          target=project or container_name
+                          return action.startswith('exec_create:') and 'deny-all' in action and target.startswith(name+'__verifier__')
                       attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
-                      attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['deny_all_exec_events']>0 and attempt['separation_accepted']
+                      attempt['verifier_deny_all_exec_events']=sum(is_verifier_deny_event(x) for x in et.splitlines())
+                      attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted']
                       attempt['static_dependency_alignment_accepted']=attempt['manifest_lock_unchanged'] and attempt['integrity_record_unchanged']
                       cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
               if setup_ok:
