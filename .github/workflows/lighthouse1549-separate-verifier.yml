@@ -44,7 +44,8 @@ jobs:
           start=time.monotonic();private=P(os.environ['LIGHTHOUSE_PRIVATE_DIR'])
           adapter='5c128513eba0f3fc720f1b6f172c009f51a3295d';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
           cases=[{'id': '1549', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347', 'inputs': {'Dockerfile': '96565377ae322cf68419ebb17e813e08e49bfaacd1bb09bdb20780909df675ff', 'eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'problem_statement.md': 'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281', 'task.yaml': '78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057', 'test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da'}}]
-          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 instrumented launcher and submission handoff oracle/nop only, not stock execution or model parity','attempts':[]}
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 pre-agent image baseline collector oracle/nop only; launcher and handoff instrumented; no model parity','attempts':[]}
+          baseline_files={'snapshot-and-collect.sh':(b'#!/bin/bash\nset -euo pipefail\n\nmode=${1:?expected freeze, collect or verify}\nrepo=${2:-/testbed}\nstate=${3:-/usr/local/share/harbor-lighthouse1549}\nbase=${4:-e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c}\noutput=${5:-/tmp/harbor-submission/model.patch}\n[[ "$repo" = /* && "$state" = /* && "$output" = /* ]]\n[[ "$base" =~ ^[0-9a-f]{40}$ ]]\ncd "$repo"\ngit_image() {\n    git -c "safe.directory=$repo" -c core.fileMode=true "$@"\n}\nfiles=(. \':(exclude)problem_assets\' \':(exclude)problem_assets/**\')\nscratch=$(mktemp -d)\npending=\ntrap \'rm -rf -- "$scratch"; if [[ -n "$pending" ]]; then rm -f -- "$pending"; fi\' EXIT\n\nread_frozen() {\n    baseline=$(cat "$state/baseline.tree")\n    [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]\n    [[ "$(git_image cat-file -t "$baseline")" = tree ]]\n}\ncapture_tree() {\n    git_image read-tree "$1" &&\n    git_image add -A -- "${files[@]}" &&\n    git_image write-tree\n}\nexport GIT_INDEX_FILE="$scratch/index"\ncase "$mode" in\n    freeze)\n        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n        mkdir -p "$state"\n        [[ ! -e "$state/baseline.tree" ]]\n        capture_tree "$base" > "$state/baseline.tree"\n        chmod 0444 "$state/baseline.tree"\n        ;;\n    collect)\n        mkdir -p "$(dirname -- "$output")"\n        rm -f -- "$output"\n        read_frozen\n        submitted=$(capture_tree "$baseline")\n        pending=$(mktemp "$(dirname -- "$output")/model.patch.XXXXXXXX")\n        git_image diff --binary --no-ext-diff --no-textconv "$baseline" "$submitted" -- "${files[@]}" > "$pending"\n        mv -- "$pending" "$output"\n        pending=\n        ;;\n    verify)\n        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n        read_frozen\n        observed=$(capture_tree "$baseline")\n        [[ "$observed" = "$baseline" ]]\n        printf \'HARBOR_IMAGE_BASELINE_MATCH %s\\n\' "$baseline"\n        ;;\n    *)\n        exit 2\n        ;;\nesac\n','d0e1e0c52d736816f460cab36219dd2d2866a0fc3155a7bb291764b114155044'),'prepare_task.py':(b'import shutil\nimport sys\nimport tomllib\nfrom pathlib import Path\n\nsource = Path(__file__).resolve().parent\nbase = \'e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c\'\nimage = \'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347\'\ntask = Path(sys.argv[1])\nconfig = task/\'task.toml\'\noriginal = config.read_text()\nconfig_data = tomllib.loads(original)\nassert config_data[\'metadata\'][\'instance_id\'] == \'GoogleChrome__lighthouse-1549\'\nassert config_data[\'verifier\'][\'environment_mode\'] == \'separate\'\nassert config_data[\'verifier\'][\'network_mode\'] == \'no-network\'\nassert config_data[\'artifacts\'] == [\'/tmp/harbor-submission/model.patch\']\nlines=original.splitlines(keepends=True)\nmatches=[i for i,l in enumerate(lines) if l.startswith(\'command = \')]\nassert len(matches)==1 and \'git -c safe.directory=/testbed diff --binary \'+base in lines[matches[0]]\nlines[matches[0]]=\'command = "bash /usr/local/libexec/harbor-lighthouse1549-collector.sh collect"\\n\'\nenvironment = task/\'environment\'\ndockerfile = environment/\'Dockerfile\'\ncontent = dockerfile.read_text()\nassert content.splitlines()[0] == \'FROM \'+image\nhelper=environment/\'snapshot-and-collect.sh\'\nassert not helper.exists()\nshutil.copyfile(source/\'snapshot-and-collect.sh\',helper)\ndockerfile.write_text(content+\'\\nCOPY snapshot-and-collect.sh /usr/local/libexec/harbor-lighthouse1549-collector.sh\\nRUN bash /usr/local/libexec/harbor-lighthouse1549-collector.sh freeze\\n\')\nentry = task/\'tests/test.sh\'\nlauncher = entry.read_text()\noriginal_apply = \'python3 -I /tests/apply_submission.py\'\nassert launcher.count(original_apply) == 1\nentry.write_text(launcher.replace(original_apply, \'bash /usr/local/libexec/harbor-lighthouse1549-collector.sh verify\\n\'+original_apply))\nconfig.write_text(\'\'.join(lines))\n','87f914ad82389345efd8c53b97de77b014d364b88acda849e977fd06a651e8de')}
           stage='setup'
           def execute(argv,timeout=120,cwd=None):
               with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
@@ -65,7 +66,7 @@ jobs:
                   data = stream.read(65537)
               pattern = rb'HARBOR_DIAG_(?:START (?:apply_submission|official_eval|write_grade)|EVAL_RC [0-9]{1,3}|EXIT (?:initial_cleanup|apply_submission|enter_testbed|official_eval|write_grade|complete) [0-9]{1,3})'
               handoff=rb'HARBOR_HANDOFF_(?:STEP (?:interpreter|load_metadata|git_head|read_patch|apply_check|apply_patch|prepare_attestation|write_attestation)|HEAD (?:match|mismatch)|ARTIFACT (?:regular [0-9]{1,16}|symlink|other|missing|inaccessible))'
-              return [line.decode('ascii') for line in data[:65536].splitlines() if re.fullmatch(pattern, line) or re.fullmatch(handoff,line)][:24]
+              return [line.decode('ascii') for line in data[:65536].splitlines() if re.fullmatch(pattern, line) or re.fullmatch(handoff,line) or re.fullmatch(rb'HARBOR_IMAGE_BASELINE_MATCH [0-9a-f]{40}',line)][:24]
           def instrument_handoff(s):
               s=once(s,'import subprocess\n','import subprocess\nimport stat\n')
               s=once(s,'def apply_submission(','''def observe_patch(patch):
@@ -179,6 +180,16 @@ jobs:
                   case_summary['stock_handoff_sha256']=sha(handoff)
                   handoff.write_text(instrument_handoff(handoff.read_text()))
                   case_summary['instrumented_handoff_sha256']=sha(handoff)
+                  stage='prepare_image_baseline'
+                  baseline_tools=private/'image-baseline-tools';baseline_tools.mkdir()
+                  for filename,(data,expected) in baseline_files.items():
+                      target=baseline_tools/filename
+                      target.write_bytes(data)
+                      assert sha(target)==expected
+                  execute([py,str(baseline_tools/'prepare_task.py'),str(task)],60)
+                  case_summary['collector_tool_sha256']={filename:digest for filename,(_,digest) in baseline_files.items()}
+                  case_summary['derived_dockerfile_sha256']=sha(task/'environment/Dockerfile')
+                  assert sha(task/'tests/eval.sh')==case['inputs']['eval.sh']
                   task_config=tomllib.loads((task/'task.toml').read_text())
                   assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
                   assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
@@ -239,6 +250,8 @@ jobs:
                   except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
                   finally:
                       containers=[]
+                      baseline_probe_errors=0
+                      expected_marker=lambda value:'HARBOR_IMAGE_BASELINE_MATCH '+value
                       def copied_hash(container_id, source_path, name):
                           target=private/name
                           process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
@@ -268,10 +281,31 @@ jobs:
                                   correct_test_visibility=control_hash is not None and all(missing for _,missing in probes.values())
                               else:
                                   correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
-                              containers.append({'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
+                              treefile=private/(name+'-'+role+'-baseline.tree')
+                              try:
+                                  copied,_=copied_hash(cid,'/usr/local/share/harbor-lighthouse1549/baseline.tree',treefile.name)
+                                  if copied is None or treefile.stat().st_size!=41:
+                                      tree_id=None
+                                  else:
+                                      contents=treefile.read_bytes()
+                                      tree_id=contents[:-1].decode('ascii') if re.fullmatch(rb'[0-9a-f]{40}\n',contents) else None
+                                  if tree_id is None:baseline_probe_errors+=1
+                              except (OSError,subprocess.TimeoutExpired):
+                                  tree_id=None
+                                  baseline_probe_errors+=1
+                              containers.append({'baseline_tree':tree_id,'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
                       attempt['submission_transport']=manifest_evidence(folder)
                       attempt['exported_stdout_markers']=read_markers(folder/'verifier/test-stdout.txt')
                       attempt['containers']=containers
+                      observed_trees=[c['baseline_tree'] for c in containers]
+                      common_tree=observed_trees[0] if len(observed_trees)==2 and observed_trees[0] is not None and observed_trees[0]==observed_trees[1] else None
+                      expected=[expected_marker(common_tree)] if common_tree else []
+                      baseline_lines=lambda marks:[line for line in (marks or []) if line.startswith('HARBOR_IMAGE_BASELINE_MATCH ')]
+                      baseline_match=bool(expected and baseline_lines(attempt.get('runtime_stdout_markers'))==expected and baseline_lines(attempt.get('exported_stdout_markers'))==expected)
+                      attempt['baseline_tree']=common_tree
+                      attempt['baseline_match_accepted']=baseline_match
+                      attempt['baseline_probe_errors']=baseline_probe_errors
+                      attempt['scoring_semantics_accepted']=attempt.get('status')=='expected_semantic_result'
                       separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
                       attempt['log_recovery_accepted']=bool(attempt.get('test_output_sha256')) and any(c['role']=='verifier' and c['runtime_logs_match_export'] for c in containers)
                       attempt['separation_accepted']=separation
@@ -292,14 +326,17 @@ jobs:
                           return action.startswith('exec_create:') and 'deny-all' in action and target.startswith(name+'__verifier__')
                       attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
                       attempt['verifier_deny_all_exec_events']=sum(is_verifier_deny_event(x) for x in et.splitlines())
-                      attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted']
+                      attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted'] and attempt['baseline_match_accepted']
                       cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
               if setup_ok:
                   for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
           summary['seconds']=round(time.monotonic()-start,2)
           assert len(summary['attempts'])==2
           summary['all_required_grades_accepted']=all(x.get('grading_accepted',False) for x in summary['attempts'])
-          summary['diagnostic_accepted']=summary['all_required_grades_accepted']
+          summary['all_required_scoring_semantics_accepted']=all(x.get('scoring_semantics_accepted',False) for x in summary['attempts'])
+          tested_trees=[x.get('baseline_tree') for x in summary['attempts']]
+          summary['both_arms_same_frozen_baseline']=len(tested_trees)==2 and tested_trees[0] is not None and tested_trees[0]==tested_trees[1]
+          summary['diagnostic_accepted']=summary['all_required_grades_accepted'] and summary['both_arms_same_frozen_baseline']
           summary['failure_marker']=None if summary['diagnostic_accepted'] else 'DIAGNOSTIC_NOT_ACCEPTED'
           print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## Lighthouse 1549 exact-adapter Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full480 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
