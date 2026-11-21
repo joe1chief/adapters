@@ -13,14 +13,35 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Check out exact adapter commit
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          repository: joe1chief/adapters
+          ref: 5c128513eba0f3fc720f1b6f172c009f51a3295d
+          path: adapter-source
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Check out exact Harbor v0.27.0 commit
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          repository: harbor-framework/harbor
+          ref: 96c86af3bc6d7e92f21fc771d21273be4714c8e9
+          path: harbor-source
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
       - name: Lighthouse 1549 exact-adapter oracle and no-op
         shell: bash
         run: |
           set -euo pipefail
+          cd "${GITHUB_WORKSPACE:?}"
+          export LIGHTHOUSE_PRIVATE_DIR="$(mktemp -d "${RUNNER_TEMP:?}/lighthouse1549.XXXXXXXX")"
+          trap 'rm -rf -- "$LIGHTHOUSE_PRIVATE_DIR"' EXIT
           python3 - <<'PY'
           import hashlib,json,os,pathlib,tomllib,platform,shutil,subprocess,time,urllib.request
           P=pathlib.Path
-          start=time.monotonic();private=P('private-run-data');private.mkdir()
+          start=time.monotonic();private=P(os.environ['LIGHTHOUSE_PRIVATE_DIR'])
           adapter='5c128513eba0f3fc720f1b6f172c009f51a3295d';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
           cases=[{'id': '1549', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347', 'inputs': {'Dockerfile': '96565377ae322cf68419ebb17e813e08e49bfaacd1bb09bdb20780909df675ff', 'eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'problem_statement.md': 'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281', 'task.yaml': '78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057', 'test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da'}}]
           summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 original oracle/nop only, not full480 or model parity','attempts':[]}
@@ -28,9 +49,6 @@ jobs:
           def execute(argv,timeout=120,cwd=None):
               with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
               if p.returncode:raise RuntimeError('command_nonzero')
-          def checkout(repo,commit,dest):
-              execute(['git','init','-q',dest]);execute(['git','-C',dest,'fetch','--depth','1',repo,commit],180);execute(['git','-C',dest,'checkout','--detach','FETCH_HEAD'])
-              assert subprocess.check_output(['git','-C',dest,'rev-parse','HEAD'],text=True).strip()==commit
           def error_category(info):
               text=json.dumps(info).lower()
               if any(x in text for x in ['pull access denied','failed to resolve source metadata','failed to resolve reference']):return 'image_resolution'
@@ -49,7 +67,11 @@ jobs:
           try:
               assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
               execute(['docker','compose','version'])
-              stage='checkout';checkout('https://github.com/joe1chief/adapters.git',adapter,'adapter-source');checkout('https://github.com/harbor-framework/harbor.git',harbor,'harbor-source')
+              stage='verify_checkout_sha'
+              for repo_dir,expected in [('adapter-source',adapter),('harbor-source',harbor)]:
+                  observed=subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()
+                  if observed!=expected:raise RuntimeError('unexpected_checkout_commit')
+              summary['exact_checkouts_verified']=True
               stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
               execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
               py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
