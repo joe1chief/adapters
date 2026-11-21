@@ -44,7 +44,7 @@ jobs:
           start=time.monotonic();private=P(os.environ['LIGHTHOUSE_PRIVATE_DIR'])
           adapter='5c128513eba0f3fc720f1b6f172c009f51a3295d';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
           cases=[{'id': '1549', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347', 'inputs': {'Dockerfile': '96565377ae322cf68419ebb17e813e08e49bfaacd1bb09bdb20780909df675ff', 'eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'problem_statement.md': 'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281', 'task.yaml': '78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057', 'test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da'}}]
-          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 instrumented launcher oracle/nop only, not stock execution or model parity','attempts':[]}
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 instrumented launcher and submission handoff oracle/nop only, not stock execution or model parity','attempts':[]}
           stage='setup'
           def execute(argv,timeout=120,cwd=None):
               with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
@@ -64,7 +64,66 @@ jobs:
               with path.open('rb') as stream:
                   data = stream.read(65537)
               pattern = rb'HARBOR_DIAG_(?:START (?:apply_submission|official_eval|write_grade)|EVAL_RC [0-9]{1,3}|EXIT (?:initial_cleanup|apply_submission|enter_testbed|official_eval|write_grade|complete) [0-9]{1,3})'
-              return [line.decode('ascii') for line in data[:65536].splitlines() if re.fullmatch(pattern, line)][:8]
+              handoff=rb'HARBOR_HANDOFF_(?:STEP (?:interpreter|load_metadata|git_head|read_patch|apply_check|apply_patch|prepare_attestation|write_attestation)|HEAD (?:match|mismatch)|ARTIFACT (?:regular [0-9]{1,16}|symlink|other|missing|inaccessible))'
+              return [line.decode('ascii') for line in data[:65536].splitlines() if re.fullmatch(pattern, line) or re.fullmatch(handoff,line)][:24]
+          def instrument_handoff(s):
+              s=once(s,'import subprocess\n','import subprocess\nimport stat\n')
+              s=once(s,'def apply_submission(','''def observe_patch(patch):
+              try:
+                  info=patch.lstat()
+                  if stat.S_ISREG(info.st_mode):
+                      print(f'HARBOR_HANDOFF_ARTIFACT regular {info.st_size}', flush=True)
+                  elif stat.S_ISLNK(info.st_mode):
+                      print('HARBOR_HANDOFF_ARTIFACT symlink', flush=True)
+                  else:
+                      print('HARBOR_HANDOFF_ARTIFACT other', flush=True)
+              except FileNotFoundError:
+                  print('HARBOR_HANDOFF_ARTIFACT missing', flush=True)
+              except OSError:
+                  print('HARBOR_HANDOFF_ARTIFACT inaccessible', flush=True)
+
+
+          def apply_submission(''')
+              s=once(s,"    base = metadata['base_commit']", "    base = metadata['base_commit']\n    print('HARBOR_HANDOFF_STEP git_head', flush=True)")
+              s=once(s,'    if head != base:',"    print('HARBOR_HANDOFF_HEAD ' + ('match' if head == base else 'mismatch'), flush=True)\n    if head != base:")
+              s=once(s,'    data = patch.read_bytes()', "    print('HARBOR_HANDOFF_STEP read_patch', flush=True)\n    data = patch.read_bytes()")
+              s=once(s,'    if data:',"    if data:\n        print('HARBOR_HANDOFF_STEP apply_check', flush=True)")
+              s=once(s,"    return {'submission_sha256'", "    print('HARBOR_HANDOFF_STEP prepare_attestation', flush=True)\n    return {'submission_sha256'")
+              # The checked adapter contains separate, sequential apply --check and apply.
+              lines=s.splitlines(keepends=True)
+              step=[i for i,l in enumerate(lines) if "'apply', str(patch.resolve())" in l]
+              assert len(step)==1
+              lines.insert(step[0],"        print('HARBOR_HANDOFF_STEP apply_patch', flush=True)\n")
+              s=''.join(lines)
+              s=once(s,"if __name__ == '__main__':\n", """if __name__ == '__main__':
+              print('HARBOR_HANDOFF_STEP interpreter', flush=True)
+              observe_patch(Path('/tmp/harbor-submission/model.patch'))
+              print('HARBOR_HANDOFF_STEP load_metadata', flush=True)
+          """)
+              return once(s,"    Path('/logs/verifier/submission.json').write_text(json.dumps(evidence))","    print('HARBOR_HANDOFF_STEP write_attestation', flush=True)\n    Path('/logs/verifier/submission.json').write_text(json.dumps(evidence))")
+          def manifest_evidence(folder):
+              source='/tmp/harbor-submission/model.patch'
+              expected='artifacts/tmp/harbor-submission/model.patch'
+              manifest=folder/'artifacts/manifest.json'
+              if manifest.is_symlink() or not manifest.is_file():return {'manifest':'missing_or_invalid'}
+              try:
+                  if manifest.stat().st_size>1048576:return {'manifest':'oversize'}
+                  rows=json.loads(manifest.read_bytes())
+                  if not isinstance(rows,list):return {'manifest':'invalid'}
+                  rows=[r for r in rows if isinstance(r,dict) and r.get('source')==source]
+                  if len(rows)!=1:return {'manifest':'valid','row':'missing' if not rows else 'duplicate'}
+                  r=rows[0]
+                  result={'manifest':'valid','row':'unique','status':r.get('status') if r.get('status') in ('ok','failed','empty','skipped') else 'other','type':r.get('type') if r.get('type') in ('file','directory') else 'other','expected_destination':r.get('destination')==expected}
+                  if not result['expected_destination']:return result
+                  p=folder/expected
+                  if not p.resolve().is_relative_to((folder/'artifacts').resolve()) or any(x.is_symlink() for x in (p,*p.parents) if x!=folder and x.is_relative_to(folder)):
+                      result['file']='symlink_or_outside';return result
+                  if not p.is_file():result['file']='missing_or_not_regular';return result
+                  size=p.stat().st_size;result.update(file='regular',bytes=size)
+                  if size<=4194304:result['sha256']=hashlib.sha256(p.read_bytes()).hexdigest()
+                  return result
+              except (ValueError,OSError,TypeError,RuntimeError):
+                  return {'manifest':'unreadable'}
           def error_category(info):
               text=json.dumps(info).lower()
               if any(x in text for x in ['pull access denied','failed to resolve source metadata','failed to resolve reference']):return 'image_resolution'
@@ -116,6 +175,10 @@ jobs:
                   case_summary['stock_launcher_sha256']=sha(test_entry)
                   test_entry.write_text(instrument(test_entry.read_text()))
                   case_summary['instrumented_launcher_sha256']=sha(test_entry)
+                  handoff=task/'tests/apply_submission.py'
+                  case_summary['stock_handoff_sha256']=sha(handoff)
+                  handoff.write_text(instrument_handoff(handoff.read_text()))
+                  case_summary['instrumented_handoff_sha256']=sha(handoff)
                   task_config=tomllib.loads((task/'task.toml').read_text())
                   assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
                   assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
@@ -206,6 +269,7 @@ jobs:
                               else:
                                   correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
                               containers.append({'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
+                      attempt['submission_transport']=manifest_evidence(folder)
                       attempt['exported_stdout_markers']=read_markers(folder/'verifier/test-stdout.txt')
                       attempt['containers']=containers
                       separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
