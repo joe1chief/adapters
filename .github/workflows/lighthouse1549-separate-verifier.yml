@@ -44,64 +44,14 @@ jobs:
           start=time.monotonic();private=P(os.environ['LIGHTHOUSE_PRIVATE_DIR'])
           adapter='5c128513eba0f3fc720f1b6f172c009f51a3295d';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
           cases=[{'id': '1549', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347', 'inputs': {'Dockerfile': '96565377ae322cf68419ebb17e813e08e49bfaacd1bb09bdb20780909df675ff', 'eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'problem_statement.md': 'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281', 'task.yaml': '78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057', 'test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da'}}]
-          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 pre-agent image baseline collector oracle/nop only; launcher and handoff instrumented; no model parity','attempts':[]}
-          baseline_files={'snapshot-and-collect.sh':(b'#!/bin/bash\nset -euo pipefail\n\nmode=${1:?expected freeze, collect or verify}\nrepo=${2:-/testbed}\nstate=${3:-/usr/local/share/harbor-lighthouse1549}\nbase=${4:-e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c}\noutput=${5:-/tmp/harbor-submission/model.patch}\n[[ "$repo" = /* && "$state" = /* && "$output" = /* ]]\n[[ "$base" =~ ^[0-9a-f]{40}$ ]]\ncd "$repo"\ngit_image() {\n    git -c "safe.directory=$repo" -c core.fileMode=true "$@"\n}\nfiles=(. \':(exclude)problem_assets\' \':(exclude)problem_assets/**\')\nscratch=$(mktemp -d)\npending=\ntrap \'rm -rf -- "$scratch"; if [[ -n "$pending" ]]; then rm -f -- "$pending"; fi\' EXIT\n\nread_frozen() {\n    baseline=$(cat "$state/baseline.tree")\n    [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]\n    [[ "$(git_image cat-file -t "$baseline")" = tree ]]\n}\ncapture_tree() {\n    git_image read-tree "$1" &&\n    git_image add -A -- "${files[@]}" &&\n    git_image write-tree\n}\nexport GIT_INDEX_FILE="$scratch/index"\ncase "$mode" in\n    freeze)\n        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n        mkdir -p "$state"\n        [[ ! -e "$state/baseline.tree" ]]\n        capture_tree "$base" > "$state/baseline.tree"\n        chmod 0444 "$state/baseline.tree"\n        ;;\n    collect)\n        mkdir -p "$(dirname -- "$output")"\n        rm -f -- "$output"\n        read_frozen\n        submitted=$(capture_tree "$baseline")\n        pending=$(mktemp "$(dirname -- "$output")/model.patch.XXXXXXXX")\n        git_image diff --binary --no-ext-diff --no-textconv "$baseline" "$submitted" -- "${files[@]}" > "$pending"\n        mv -- "$pending" "$output"\n        pending=\n        ;;\n    verify)\n        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n        read_frozen\n        observed=$(capture_tree "$baseline")\n        [[ "$observed" = "$baseline" ]]\n        printf \'HARBOR_IMAGE_BASELINE_MATCH %s\\n\' "$baseline"\n        ;;\n    *)\n        exit 2\n        ;;\nesac\n','d0e1e0c52d736816f460cab36219dd2d2866a0fc3155a7bb291764b114155044'),'prepare_task.py':(b'import shutil\nimport sys\nimport tomllib\nfrom pathlib import Path\n\nsource = Path(__file__).resolve().parent\nbase = \'e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c\'\nimage = \'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347\'\ntask = Path(sys.argv[1])\nconfig = task/\'task.toml\'\noriginal = config.read_text()\nconfig_data = tomllib.loads(original)\nassert config_data[\'metadata\'][\'instance_id\'] == \'GoogleChrome__lighthouse-1549\'\nassert config_data[\'verifier\'][\'environment_mode\'] == \'separate\'\nassert config_data[\'verifier\'][\'network_mode\'] == \'no-network\'\nassert config_data[\'artifacts\'] == [\'/tmp/harbor-submission/model.patch\']\nlines=original.splitlines(keepends=True)\nmatches=[i for i,l in enumerate(lines) if l.startswith(\'command = \')]\nassert len(matches)==1 and \'git -c safe.directory=/testbed diff --binary \'+base in lines[matches[0]]\nlines[matches[0]]=\'command = "bash /usr/local/libexec/harbor-lighthouse1549-collector.sh collect"\\n\'\nenvironment = task/\'environment\'\ndockerfile = environment/\'Dockerfile\'\ncontent = dockerfile.read_text()\nassert content.splitlines()[0] == \'FROM \'+image\nhelper=environment/\'snapshot-and-collect.sh\'\nassert not helper.exists()\nshutil.copyfile(source/\'snapshot-and-collect.sh\',helper)\ndockerfile.write_text(content+\'\\nCOPY snapshot-and-collect.sh /usr/local/libexec/harbor-lighthouse1549-collector.sh\\nRUN bash /usr/local/libexec/harbor-lighthouse1549-collector.sh freeze\\n\')\nentry = task/\'tests/test.sh\'\nlauncher = entry.read_text()\noriginal_apply = \'python3 -I /tests/apply_submission.py\'\nassert launcher.count(original_apply) == 1\nentry.write_text(launcher.replace(original_apply, \'bash /usr/local/libexec/harbor-lighthouse1549-collector.sh verify\\n\'+original_apply))\nconfig.write_text(\'\'.join(lines))\n','87f914ad82389345efd8c53b97de77b014d364b88acda849e977fd06a651e8de')}
+          summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 clean PR candidate oracle/nop only; no instrumentation in generated task; no model parity','attempts':[]}
+          clean_patch=b'diff --git a/src/swebench-multimodal/src/swebench_multimodal/adapter.py b/src/swebench-multimodal/src/swebench_multimodal/adapter.py\n--- a/src/swebench-multimodal/src/swebench_multimodal/adapter.py\n+++ b/src/swebench-multimodal/src/swebench_multimodal/adapter.py\n@@ -32,6 +32,14 @@\n \n # Pattern strictly matching adapter-generated backup directories\n BACKUP_DIR_PATTERN = re.compile(r"^\\.backup_(?P<task_id>.+)_(?P<token>[0-9a-f]{8,32})$")\n+\n+LIGHTHOUSE_1549_ID = "GoogleChrome__lighthouse-1549"\n+LIGHTHOUSE_1549_BASE = "e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c"\n+LIGHTHOUSE_1549_IMAGE = "swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549"\n+LIGHTHOUSE_1549_PIN = (\n+    LIGHTHOUSE_1549_IMAGE + "@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347"\n+)\n+LIGHTHOUSE_1549_COLLECTOR = "/usr/local/libexec/harbor-lighthouse1549-collector.sh"\n \n DEFAULT_SOURCE_DIR = Path(\n     os.environ.get(\n@@ -235,6 +243,36 @@\n         with _file_lock(self.output_dir / ".adapter_install.lock"):\n             self._recover_backups_locked()\n \n+    @staticmethod\n+    def _install_lighthouse_image_baseline(staging_dir: Path) -> None:\n+        environment = staging_dir / "environment"\n+        helper = environment / "snapshot-and-collect.sh"\n+        shutil.copy2(TEMPLATE_DIR / "environment" / "lighthouse1549-collector.sh", helper)\n+        dockerfile = environment / "Dockerfile"\n+        with dockerfile.open("a", encoding="utf-8") as stream:\n+            stream.write(\n+                f"\\nCOPY {helper.name} {LIGHTHOUSE_1549_COLLECTOR}\\n"\n+                f"RUN bash {LIGHTHOUSE_1549_COLLECTOR} freeze\\n"\n+            )\n+\n+        launcher = staging_dir / "tests" / "test.sh"\n+        command = "python3 -I /tests/apply_submission.py"\n+        text = launcher.read_text(encoding="utf-8")\n+        if text.count(command) != 1:\n+            raise ValueError("Unexpected Lighthouse #1549 verifier launcher")\n+        launcher.write_text(\n+            text.replace(command, f"bash {LIGHTHOUSE_1549_COLLECTOR} verify\\n{command}", 1),\n+            encoding="utf-8",\n+        )\n+\n+        config = staging_dir / "task.toml"\n+        lines = config.read_text(encoding="utf-8").splitlines(keepends=True)\n+        collect = [i for i, line in enumerate(lines) if line.startswith("command = ")]\n+        if len(collect) != 1 or LIGHTHOUSE_1549_BASE not in lines[collect[0]]:\n+            raise ValueError("Unexpected Lighthouse #1549 collector configuration")\n+        lines[collect[0]] = f\'command = "bash {LIGHTHOUSE_1549_COLLECTOR} collect"\\n\'\n+        config.write_text("".join(lines), encoding="utf-8")\n+\n     def generate_task(self, instance_id: str, overwrite: bool | None = None) -> Path:\n         """Generate a single Harbor task directory."""\n         instance_id = self._normalize_instance_id(instance_id)\n@@ -277,6 +315,14 @@\n                 f"Untrusted or malformed container image for task {instance_id}: {raw_image!r}."\n             )\n         image_name = raw_image\n+        if instance_id == LIGHTHOUSE_1549_ID:\n+            expected = {LIGHTHOUSE_1549_IMAGE + ":latest", LIGHTHOUSE_1549_PIN}\n+            if (\n+                meta["base_commit"] != LIGHTHOUSE_1549_BASE\n+                or raw_image.removeprefix("docker.io/") not in expected\n+            ):\n+                raise ValueError("Unverified Lighthouse #1549 base commit or image")\n+            image_name = LIGHTHOUSE_1549_PIN\n \n         # Stage generation in a temporary directory for atomic creation\n         self.output_dir.mkdir(parents=True, exist_ok=True)\n@@ -389,6 +435,8 @@\n                 .replace("{base_commit}", meta["base_commit"])\n             )\n             (staging_dir / "task.toml").write_text(task_toml_content, encoding="utf-8")\n+            if instance_id == LIGHTHOUSE_1549_ID:\n+                self._install_lighthouse_image_baseline(staging_dir)\n \n             # Atomically move staging_dir to task_dir with backup restoration on failure\n             lock_file = self.output_dir / ".adapter_install.lock"\ndiff --git a/src/swebench-multimodal/src/swebench_multimodal/task-template/environment/lighthouse1549-collector.sh b/src/swebench-multimodal/src/swebench_multimodal/task-template/environment/lighthouse1549-collector.sh\nnew file mode 100644\n--- /dev/null\n+++ b/src/swebench-multimodal/src/swebench_multimodal/task-template/environment/lighthouse1549-collector.sh\n@@ -0,0 +1,58 @@\n+#!/bin/bash\n+set -euo pipefail\n+\n+mode=${1:?expected freeze, collect or verify}\n+repo=${2:-/testbed}\n+state=${3:-/usr/local/share/harbor-lighthouse1549}\n+base=${4:-e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c}\n+output=${5:-/tmp/harbor-submission/model.patch}\n+[[ "$repo" = /* && "$state" = /* && "$output" = /* ]]\n+[[ "$base" =~ ^[0-9a-f]{40}$ ]]\n+cd "$repo"\n+git_image() {\n+    git -c "safe.directory=$repo" -c core.fileMode=true "$@"\n+}\n+files=(. \':(exclude)problem_assets\' \':(exclude)problem_assets/**\')\n+scratch=$(mktemp -d)\n+pending=\n+trap \'rm -rf -- "$scratch"; if [[ -n "$pending" ]]; then rm -f -- "$pending"; fi\' EXIT\n+\n+read_frozen() {\n+    baseline=$(cat "$state/baseline.tree")\n+    [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]\n+    [[ "$(git_image cat-file -t "$baseline")" = tree ]]\n+}\n+capture_tree() {\n+    git_image read-tree "$1" &&\n+    git_image add -A -- "${files[@]}" &&\n+    git_image write-tree\n+}\n+export GIT_INDEX_FILE="$scratch/index"\n+case "$mode" in\n+    freeze)\n+        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n+        mkdir -p "$state"\n+        [[ ! -e "$state/baseline.tree" ]]\n+        capture_tree "$base" > "$state/baseline.tree"\n+        chmod 0444 "$state/baseline.tree"\n+        ;;\n+    collect)\n+        mkdir -p "$(dirname -- "$output")"\n+        rm -f -- "$output"\n+        read_frozen\n+        submitted=$(capture_tree "$baseline")\n+        pending=$(mktemp "$(dirname -- "$output")/model.patch.XXXXXXXX")\n+        git_image diff --binary --no-ext-diff --no-textconv "$baseline" "$submitted" -- "${files[@]}" > "$pending"\n+        mv -- "$pending" "$output"\n+        pending=\n+        ;;\n+    verify)\n+        [[ "$(git_image rev-parse --verify HEAD)" = "$base" ]]\n+        read_frozen\n+        observed=$(capture_tree "$baseline")\n+        [[ "$observed" = "$baseline" ]]\n+        ;;\n+    *)\n+        exit 2\n+        ;;\n+esac\n'
+          clean_patch_sha256='c1498c57cba59ada7127a0a4edfca7f806c3921a1b56b9fb73cd287322dde5dd'
+          clean_files={'src/swebench-multimodal/src/swebench_multimodal/adapter.py': '161d7644242f06df91381b8425f54ecbf0441b67a9e8e59e9ac76e6fac841497', 'src/swebench-multimodal/src/swebench_multimodal/task-template/environment/lighthouse1549-collector.sh': '17adaa4dc5f3b80eea63dc05ad5e1e280fd1214c70cd79d70178d9b913e21c81'}
           stage='setup'
           def execute(argv,timeout=120,cwd=None):
               with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
               if p.returncode:raise RuntimeError('command_nonzero')
-          def once(text, old, new):
-              assert text.count(old) == 1, old
-              return text.replace(old, new, 1)
-          def instrument(text):
-              text = once(text, 'set -eu\n', 'set -eu\nphase=initial_cleanup\ntrap \'rc=$?; printf "HARBOR_DIAG_EXIT %s %s\\n" "$phase" "$rc"\' EXIT\n')
-              text = once(text, 'python3 -I /tests/apply_submission.py', 'phase=apply_submission\nprintf "HARBOR_DIAG_START %s\\n" "$phase"\npython3 -I /tests/apply_submission.py')
-              text = once(text, 'cd /testbed', 'phase=enter_testbed\ncd /testbed\nphase=official_eval\nprintf "HARBOR_DIAG_START %s\\n" "$phase"')
-              text = once(text, '2>&1\nset -e', '2>&1\neval_rc=$?\nset -e\nprintf "HARBOR_DIAG_EVAL_RC %s\\n" "$eval_rc"')
-              return once(text, 'python3 /tests/grade.py /logs/verifier', 'phase=write_grade\nprintf "HARBOR_DIAG_START %s\\n" "$phase"\npython3 /tests/grade.py /logs/verifier\nphase=complete')
-          def read_markers(path):
-              if not path.is_file() or path.is_symlink():
-                  return None
-              with path.open('rb') as stream:
-                  data = stream.read(65537)
-              pattern = rb'HARBOR_DIAG_(?:START (?:apply_submission|official_eval|write_grade)|EVAL_RC [0-9]{1,3}|EXIT (?:initial_cleanup|apply_submission|enter_testbed|official_eval|write_grade|complete) [0-9]{1,3})'
-              handoff=rb'HARBOR_HANDOFF_(?:STEP (?:interpreter|load_metadata|git_head|read_patch|apply_check|apply_patch|prepare_attestation|write_attestation)|HEAD (?:match|mismatch)|ARTIFACT (?:regular [0-9]{1,16}|symlink|other|missing|inaccessible))'
-              return [line.decode('ascii') for line in data[:65536].splitlines() if re.fullmatch(pattern, line) or re.fullmatch(handoff,line) or re.fullmatch(rb'HARBOR_IMAGE_BASELINE_MATCH [0-9a-f]{40}',line)][:24]
-          def instrument_handoff(s):
-              s=once(s,'import subprocess\n','import subprocess\nimport stat\n')
-              s=once(s,'def apply_submission(','''def observe_patch(patch):
-              try:
-                  info=patch.lstat()
-                  if stat.S_ISREG(info.st_mode):
-                      print(f'HARBOR_HANDOFF_ARTIFACT regular {info.st_size}', flush=True)
-                  elif stat.S_ISLNK(info.st_mode):
-                      print('HARBOR_HANDOFF_ARTIFACT symlink', flush=True)
-                  else:
-                      print('HARBOR_HANDOFF_ARTIFACT other', flush=True)
-              except FileNotFoundError:
-                  print('HARBOR_HANDOFF_ARTIFACT missing', flush=True)
-              except OSError:
-                  print('HARBOR_HANDOFF_ARTIFACT inaccessible', flush=True)
-
-
-          def apply_submission(''')
-              s=once(s,"    base = metadata['base_commit']", "    base = metadata['base_commit']\n    print('HARBOR_HANDOFF_STEP git_head', flush=True)")
-              s=once(s,'    if head != base:',"    print('HARBOR_HANDOFF_HEAD ' + ('match' if head == base else 'mismatch'), flush=True)\n    if head != base:")
-              s=once(s,'    data = patch.read_bytes()', "    print('HARBOR_HANDOFF_STEP read_patch', flush=True)\n    data = patch.read_bytes()")
-              s=once(s,'    if data:',"    if data:\n        print('HARBOR_HANDOFF_STEP apply_check', flush=True)")
-              s=once(s,"    return {'submission_sha256'", "    print('HARBOR_HANDOFF_STEP prepare_attestation', flush=True)\n    return {'submission_sha256'")
-              # The checked adapter contains separate, sequential apply --check and apply.
-              lines=s.splitlines(keepends=True)
-              step=[i for i,l in enumerate(lines) if "'apply', str(patch.resolve())" in l]
-              assert len(step)==1
-              lines.insert(step[0],"        print('HARBOR_HANDOFF_STEP apply_patch', flush=True)\n")
-              s=''.join(lines)
-              s=once(s,"if __name__ == '__main__':\n", """if __name__ == '__main__':
-              print('HARBOR_HANDOFF_STEP interpreter', flush=True)
-              observe_patch(Path('/tmp/harbor-submission/model.patch'))
-              print('HARBOR_HANDOFF_STEP load_metadata', flush=True)
-          """)
-              return once(s,"    Path('/logs/verifier/submission.json').write_text(json.dumps(evidence))","    print('HARBOR_HANDOFF_STEP write_attestation', flush=True)\n    Path('/logs/verifier/submission.json').write_text(json.dumps(evidence))")
           def manifest_evidence(folder):
               source='/tmp/harbor-submission/model.patch'
               expected='artifacts/tmp/harbor-submission/model.patch'
@@ -148,6 +98,19 @@ jobs:
                   observed=subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()
                   if observed!=expected:raise RuntimeError('unexpected_checkout_commit')
               summary['exact_checkouts_verified']=True
+              stage='apply_exact_clean_candidate'
+              package=P('adapter-source')
+              status=lambda:subprocess.check_output(['git','-C',str(package),'status','--porcelain=v1','--untracked-files=all','-z']).split(b'\0')
+              assert status()==[b'']
+              patchfile=private/'clean-candidate.patch';patchfile.write_bytes(clean_patch)
+              assert sha(patchfile)==clean_patch_sha256
+              execute(['git','apply','--check','--whitespace=nowarn',str(patchfile)],60,str(package))
+              execute(['git','apply','--whitespace=nowarn',str(patchfile)],60,str(package))
+              changed={entry[3:].decode() for entry in status() if entry}
+              assert changed==set(clean_files)
+              assert all(sha(package/path)==expected for path,expected in clean_files.items())
+              summary['clean_candidate_patch_sha256']=clean_patch_sha256
+              summary['clean_candidate_files_verified']=True
               stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
               execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
               py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
@@ -165,31 +128,18 @@ jobs:
                       url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/GoogleChrome__lighthouse-'+n+'/'+name
                       with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
                       assert sha(dest)==digest
-                  meta=td/'task.yaml';text=meta.read_text();old='image: swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-'+n+':latest';assert text.count(old)==1;meta.write_text(text.replace(old,'image: '+image))
                   stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
                   with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','GoogleChrome__lighthouse-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
                   task=P('generated/googlechrome-lighthouse-'+n).resolve();assert task.is_dir()
                   for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/test.patch','test.patch'),('tests/tests.json','tests.json')]:assert sha(task/generated)==case['inputs'][original]
                   for public_asset in (f for f in case['inputs'] if f.startswith('problem_assets/')):
                       assert sha(task/public_asset)==sha(task/'environment'/public_asset)==case['inputs'][public_asset]
-                  test_entry=task/'tests/test.sh'
-                  case_summary['stock_launcher_sha256']=sha(test_entry)
-                  test_entry.write_text(instrument(test_entry.read_text()))
-                  case_summary['instrumented_launcher_sha256']=sha(test_entry)
-                  handoff=task/'tests/apply_submission.py'
-                  case_summary['stock_handoff_sha256']=sha(handoff)
-                  handoff.write_text(instrument_handoff(handoff.read_text()))
-                  case_summary['instrumented_handoff_sha256']=sha(handoff)
-                  stage='prepare_image_baseline'
-                  baseline_tools=private/'image-baseline-tools';baseline_tools.mkdir()
-                  for filename,(data,expected) in baseline_files.items():
-                      target=baseline_tools/filename
-                      target.write_bytes(data)
-                      assert sha(target)==expected
-                  execute([py,str(baseline_tools/'prepare_task.py'),str(task)],60)
-                  case_summary['collector_tool_sha256']={filename:digest for filename,(_,digest) in baseline_files.items()}
-                  case_summary['derived_dockerfile_sha256']=sha(task/'environment/Dockerfile')
-                  assert sha(task/'tests/eval.sh')==case['inputs']['eval.sh']
+                  stage='verify_uninstrumented_generated_task'
+                  generated_hashes={'environment/Dockerfile': 'd69aa79ff70a52a22816834a89d0d95b5415bd92bf963d7e95089c90197a7dd9', 'environment/snapshot-and-collect.sh': '17adaa4dc5f3b80eea63dc05ad5e1e280fd1214c70cd79d70178d9b913e21c81', 'task.toml': '04317b299b66c23b223feed407282d2966b1efccb053aff14dc7dadc99297029', 'tests/test.sh': 'a6603ef4cf638605350073126512cd4b6c78f9dd5768af3d0071c8e3cae31fea', 'tests/apply_submission.py': '2f9cacd5cf1f3596d5a63d278d8a9ae5be657a5ff22dbb0321523d6c6ef6af25', 'tests/grade.py': 'ccf08f2d1de503999722669141caf4af9e9e92d06f85260973446ee1d6ff5808'}
+                  assert all(sha(task/path)==expected for path,expected in generated_hashes.items())
+                  assert (task/'environment/Dockerfile').read_text().splitlines()[0]=='FROM '+image
+                  assert sha(td/'task.yaml')==case['inputs']['task.yaml']
+                  case_summary['clean_generated_file_sha256']=generated_hashes
                   task_config=tomllib.loads((task/'task.toml').read_text())
                   assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
                   assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
@@ -251,7 +201,6 @@ jobs:
                   finally:
                       containers=[]
                       baseline_probe_errors=0
-                      expected_marker=lambda value:'HARBOR_IMAGE_BASELINE_MATCH '+value
                       def copied_hash(container_id, source_path, name):
                           target=private/name
                           process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
@@ -266,9 +215,6 @@ jobs:
                               role='verifier' if '__verifier__' in project else 'agent'
                               log_match={}
                               if role=='verifier':
-                                  stdout_name=name+'-runtime-test-stdout.txt'
-                                  copied_hash(cid,'/logs/verifier/test-stdout.txt',stdout_name)
-                                  attempt['runtime_stdout_markers']=read_markers(private/stdout_name)
                                   attempt['runtime_evidence_present']={}
                                   for artifact in ('test_output.log','reward.txt','report.json','submission.json'):
                                       exported=folder/'verifier'/artifact
@@ -295,15 +241,13 @@ jobs:
                                   baseline_probe_errors+=1
                               containers.append({'baseline_tree':tree_id,'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
                       attempt['submission_transport']=manifest_evidence(folder)
-                      attempt['exported_stdout_markers']=read_markers(folder/'verifier/test-stdout.txt')
                       attempt['containers']=containers
                       observed_trees=[c['baseline_tree'] for c in containers]
                       common_tree=observed_trees[0] if len(observed_trees)==2 and observed_trees[0] is not None and observed_trees[0]==observed_trees[1] else None
-                      expected=[expected_marker(common_tree)] if common_tree else []
-                      baseline_lines=lambda marks:[line for line in (marks or []) if line.startswith('HARBOR_IMAGE_BASELINE_MATCH ')]
-                      baseline_match=bool(expected and baseline_lines(attempt.get('runtime_stdout_markers'))==expected and baseline_lines(attempt.get('exported_stdout_markers'))==expected)
                       attempt['baseline_tree']=common_tree
-                      attempt['baseline_match_accepted']=baseline_match
+                      # Successful clean submission attestation follows the fail-closed baseline verification in the hashed launcher.
+                      attempt['verifier_preapply_baseline_check_completed']=bool((attempt.get('submission') or {}).get('accepted'))
+                      attempt['baseline_match_accepted']=common_tree is not None and attempt['verifier_preapply_baseline_check_completed']
                       attempt['baseline_probe_errors']=baseline_probe_errors
                       attempt['scoring_semantics_accepted']=attempt.get('status')=='expected_semantic_result'
                       separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
