@@ -1,0 +1,226 @@
+name: SciCode Lanczos 5 separate verifier
+on:
+  push:
+    branches: [diagnostic/scicode17-lanczos-v027-20261122]
+    paths: [.github/workflows/scicode17-lanczos-v027.yml]
+permissions:
+  contents: read
+concurrency:
+  group: scicode17-lanczos-one-shot-20261122
+  cancel-in-progress: false
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact SciCode adapter source
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          repository: joe1chief/adapters
+          ref: 3c2395aef45f385234b72f357b00190e44fb2b63
+          path: adapter-source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Check out exact Harbor v0.27.0 source
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          repository: harbor-framework/harbor
+          ref: 96c86af3bc6d7e92f21fc771d21273be4714c8e9
+          path: harbor-source
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Lanczos #5 contributor reference and known-wrong
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE:?}"
+          export SCICODE_PRIVATE="$(mktemp -d "${RUNNER_TEMP:?}/scicode17.XXXXXXXX")"
+          trap 'rm -rf -- "$SCICODE_PRIVATE"' EXIT
+          python3 - <<'PY'
+          migration=b'diff --git a/src/scicode-verified/README.md b/src/scicode-verified/README.md\n--- a/src/scicode-verified/README.md\n+++ b/src/scicode-verified/README.md\n@@ -8,7 +8,7 @@\n - **Benchmark Scale:** 64 main problems containing 290 total sub-steps (287 scored sub-steps, with 3 official skip steps: 13.6, 62.1, and 76.3 whose reference code is injected for later steps).\n - **Domain & Language:** Python scientific computing using NumPy, SciPy, SymPy, and Matplotlib against numerical test targets stored in an HDF5 dataset.\n - **Provenance & Licensing:** Developed by the SciCode-Verified team ([arXiv:2608.04975](https://arxiv.org/abs/2608.04975), [GitHub](https://github.com/flyingwagner/scicode-verified)). Released under the Apache-2.0 license.\n-- **Key Differences from Upstream SciCode:** The original `scicode` benchmark test split contains 65 problems with `ground_truth_code=None` and numerous flawed test assertions and frozen numeric targets. SciCode-Verified systematically repaired 262 verified defects across 63 of 64 problems. Furthermore, this Harbor adapter provides 20 verified authored reference oracle solutions that pass all tests with 100% reward.\n+- **Key Differences from Upstream SciCode:** The original `scicode` benchmark test split contains 65 problems with `ground_truth_code=None` and numerous flawed test assertions and frozen numeric targets. SciCode-Verified systematically repaired 262 verified defects across 63 of 64 problems. Furthermore, this Harbor adapter provides 20 authored reference oracle solutions; the other 44 of 64 tasks do not have authored oracles.\n - **Task Selection:** Problem 2 is excluded upstream in the v2 release; exactly 64 problems are generated in the canonical order pinned by `manifest.json`.\n \n ## What is SciCode-Verified?\n@@ -20,9 +20,9 @@\n ## Adapter Features\n \n - **Dual-Environment OR Verifier:** Emulates upstream `eval_clean` by evaluating each sub-step under both a 2024 Python environment (NumPy 1.26.4 / SciPy 1.13.1) and a 2025 Python environment (NumPy 2.4.6 / SciPy 1.17.1). A sub-step passes if either environment exits 0, ensuring robustness against API deprecations and subtle numeric drift.\n-- **True Oracle Solutions:** Ships 20 authored reference oracle solutions (covering 63 scored sub-steps) that achieve a perfect 1.0 (100%) reward across all tasks.\n+- **True Oracle Solutions:** Ships 20 authored reference oracle solutions (covering 63 scored sub-steps). This oracle subset is not a full 64-task validation.\n - **Automated Checksum Verification:** Verifies the MD5 hashes of `problems_test.jsonl` and `test_data_cleaned.h5` against `manifest.json` before grading.\n-- **Host Bind-Mounting of Large Data:** The ~1.1 GB HDF5 test dataset is bind-mounted read-only at runtime via `$HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH`, avoiding baking large binary artifacts into Docker container images.\n+- **Host Bind-Mounting of Large Data:** The ~1.1 GB HDF5 test dataset is bind-mounted read-only into the separate verifier only via `$HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH`, avoiding baking large binary artifacts into Docker container images.\n - **Skip Step Handling:** Injects gold reference code for official skip steps (13.6, 62.1, 76.3) so agents and subsequent steps have access to dependent functions without penalizing scores.\n - **Flexible Splits:** Supports `--split full` (all 64 problems) and `--split oracle` / `--split parity` (the 20 problems with verified oracle solutions).\n \n@@ -36,11 +36,12 @@\n     \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 task.toml                 # Task configuration, metadata, resource limits\n     \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 instruction.md            # Problem description, dependencies, function signatures\n     \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 environment/\n-    \xe2\x94\x82   \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 Dockerfile            # Container image with dual 2024/2025 Python venvs\n-    \xe2\x94\x82   \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 docker-compose.yaml   # Read-only bind-mount of test_data_cleaned.h5\n+    \xe2\x94\x82   \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 Dockerfile            # Agent environment; no tests or test data mount\n     \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 solution/\n     \xe2\x94\x82   \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 solve.sh              # Oracle reference solution script\n     \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 tests/\n+        \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 Dockerfile            # Bundles the verifier tests\n+        \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 docker-compose.yaml   # Verifier-only read-only HDF5 mount\n         \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 test.sh               # Entrypoint test runner\n         \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 test_outputs.py       # Dual-environment OR grading verifier\n         \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80 problem_data.json     # Sub-step specifications and test cases\n@@ -148,7 +149,7 @@\n \n > **Important Distinction (Authored-Oracle Validation vs. Independent Agent Parity)**: The 100% pass rates on 20 problems reported below represent **authored-oracle validation** (confirming verifier agreement, task packaging, and author reference solution correctness across both harnesses). This dataset is distinct from the unverified SciCode benchmark. Matched model parity on an independent agent (e.g. Claude Code / Codex) will be coordinated with the Harbor maintainers per their onboarding guidance.\n \n-Validation was established by running the verified reference solutions on both the upstream SciCode-Verified harness (`eval_clean/run_deepseek_eval.py`) and within Harbor using the `oracle` agent on the 20 tasks that have authored oracle reference solutions (covering 63 scored sub-steps across varying step counts).\n+Historical results were reported from running the verified reference solutions on both the upstream SciCode-Verified harness (`eval_clean/run_deepseek_eval.py`) and within Harbor using the `oracle` agent on the 20 tasks that have authored oracle reference solutions (covering 63 scored sub-steps across varying step counts).\n \n | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |\n |-------|-------|--------|----------------|--------------|--------------------------------|----------------------------|\n@@ -156,7 +157,7 @@\n \n ### Reproduction Commands\n \n-To reproduce the parity results on the Harbor adapter side:\n+To run the same oracle subset on the Harbor adapter side:\n \n ```bash\n # 1. Ensure the HDF5 test dataset path is exported\n@@ -167,7 +168,7 @@\n uv run scicode-verified --split parity --output-dir ../../datasets/scicode-verified --overwrite\n cd ../..\n \n-# 3. Execute the parity run in Harbor\n+# 3. Execute historical-scope oracle validation in Harbor\n uv run harbor run -c src/scicode-verified/run_scicode-verified_oracle.yaml\n ```\n \n@@ -181,11 +182,11 @@\n python eval_clean/regrade_multienv.py --dataset cleaned --envs 2024:/opt/scicode-verified/envs/2024/bin/python 2025:/opt/scicode-verified/envs/2025/bin/python\n ```\n \n-Results demonstrate exact numerical equivalence (100% pass rate) with zero variance across all runs.\n+The reported results apply only to the 20 authored oracles on the historical grading setup. This separate-verifier migration has not rerun those 20 tasks or measured matched-model parity.\n \n ## Notes & Caveats\n \n-1. **Test Data Bind Mount:** `test_data_cleaned.h5` (~1.1 GB) is not baked into the Docker image. You must export `HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH` pointing to your local copy before starting trials or runs.\n+1. **Test Data Bind Mount:** `test_data_cleaned.h5` (~1.1 GB) is not baked into the Docker image. You must export `HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH` pointing to your local copy before starting trials or runs. The verifier receives the agent\xe2\x80\x99s /app/solution.py through Harbor artifact transfer; tests and HDF5 are not present in the agent environment. The scoring process inside the verifier still executes submitted Python; this separation does not itself prove protection against a submission tampering with in-process grading.\n 2. **Dual-Environment Docker Image:** The Docker environment builds two isolated virtual environments (`/opt/scicode-verified/envs/2024` and `/opt/scicode-verified/envs/2025`). The initial Docker image build requires ~5-10 minutes depending on network bandwidth and is subsequently cached.\n 3. **Excluded Tasks:** Upstream SciCode-Verified v2 excluded Problem 2 due to irremediable specification issues, leaving exactly 64 problems.\n 4. **Skip Steps:** Problems 13, 62, and 76 have official skip steps (13.6, 62.1, 76.3). These steps are not scored; their gold implementation is injected into the evaluation script so downstream steps execute successfully.\ndiff --git a/src/scicode-verified/src/scicode_verified/adapter.py b/src/scicode-verified/src/scicode_verified/adapter.py\n--- a/src/scicode-verified/src/scicode_verified/adapter.py\n+++ b/src/scicode-verified/src/scicode_verified/adapter.py\n@@ -452,7 +452,7 @@\n                 TEMPLATE_DIR / "environment" / "Dockerfile",\n                 staging_dir / "environment" / "Dockerfile",\n             )\n-            self._write_docker_compose(staging_dir)\n+            self._write_verifier_environment(staging_dir)\n             self._write_solution(staging_dir, record)\n             self._write_test_sh(staging_dir)\n             self._copy_test_support(staging_dir)\n@@ -511,7 +511,8 @@\n                     pass\n             raise\n \n-    def _write_docker_compose(self, task_dir: Path) -> None:\n+    def _write_verifier_environment(self, task_dir: Path) -> None:\n+        # Only Harbor\xe2\x80\x99s separate verifier uses the tests/ compose and build context.\n         # The HDF5 is bind-mounted read-only from the HOST at `harbor run` time via\n         # $HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH (NOT baked into the image). The\n         # `${VAR:?...}` syntax aborts compose with a clear error if the var is unset.\n@@ -524,7 +525,14 @@\n             "set HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH to an absolute path to a local "\n             \'test_data_cleaned.h5 before running harbor}:/app/test_data.h5:ro"\\n\'\n         )\n-        (task_dir / "environment" / "docker-compose.yaml").write_text(compose)\n+        tests = task_dir / "tests"\n+        (tests / "docker-compose.yaml").write_text(compose)\n+        agent_dockerfile = (task_dir / "environment" / "Dockerfile").read_text()\n+        (tests / "Dockerfile").write_text(\n+            f"{agent_dockerfile.rstrip()}\\n\\n"\n+            "COPY . /tests/\\n"\n+            "RUN chmod 0755 /tests/test.sh\\n"\n+        )\n \n     def _write_task_toml(self, task_dir: Path, record: dict) -> None:\n         template = (TEMPLATE_DIR / "task.toml").read_text()\ndiff --git a/src/scicode-verified/src/scicode_verified/task-template/task.toml b/src/scicode-verified/src/scicode_verified/task-template/task.toml\n--- a/src/scicode-verified/src/scicode_verified/task-template/task.toml\n+++ b/src/scicode-verified/src/scicode_verified/task-template/task.toml\n@@ -1,6 +1,7 @@\n # Refer to https://harborframework.com/docs/task-format for more details.\n \n schema_version = "1.4"\n+artifacts = ["/app/solution.py"]\n \n # =============================================================================\n # Task Section\n@@ -37,6 +38,7 @@\n # Verifier Section\n # =============================================================================\n [verifier]\n+environment_mode = "separate"\n network_mode = "no-network"\n timeout_sec = 5400.0\n \n'
+          migration_sha='dd57a6668615e48e7b03f2a25c2e9d7ee029716e11c531cadf00d2017cfdd896'
+          package_hashes={'src/scicode-verified/README.md': 'd8a0e0a4fb56b61b7a0082fae3650ad40c3f02e23eb59e75cb36d8f066b7265e', 'src/scicode-verified/src/scicode_verified/adapter.py': '5b4d71bce7af2accc4c3a94459cf68bfb62996579ccf5d2e8d1376beb495971b', 'src/scicode-verified/src/scicode_verified/task-template/task.toml': '4f84ddb8995d2759937ee67b9f61474a26921d5235ab15533864ffdf58c110c9'}
+          wrong_code='import numpy as np\n\ndef lanczos(A, b, m):\n    return np.zeros((A.shape[0], m + 1))\n'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import shutil
+          import subprocess
+          import time
+          import tomllib
+          import urllib.request
+
+          P=pathlib.Path
+          start=time.monotonic()
+          private=P(os.environ['SCICODE_PRIVATE'])
+          adapter='3c2395aef45f385234b72f357b00190e44fb2b63'
+          harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9'
+          data_tag='f9b1b421ec06977f8412eda5fae47d843deb1046'
+          author_blob='cd1055647ae89ef36e72fab319446cdbe356809a'
+          author_sha='4eea6e148f3fddc242fcdeaf1de673217d947b23622dc651af16c8ff52ce4168'
+          assets={
+           'manifest.json':(2667,'5e17afe722e127d120d6e48793cdf0379d430068eea8efb94a25503c6b3e83f9',None),
+           'problems_test.jsonl':(947776,'427771cb8bceb5058e8b510af0ee2c8210827a1491e0cdf8e6db56d4ed1440ba','5c604d8dbf52642bd94e13b92c8f52eb'),
+           'test_data_cleaned.h5':(1108078257,'8fb6e575b7b6dda5e48b04dea338fc6af4fe185774b8f19221c96945df9b4142','2b41a7df40ddc23ce651ec05b8ecb6f8'),
+          }
+          summary=dict(task_id='scicode-verified-5',adapter=adapter,harbor=harbor,data_release_commit=data_tag,oracle_origin='adapter contributor; not official benchmark code',model_calls=0,attempts=[])
+          def sha(path):
+           with P(path).open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          def log_run(argv,label,timeout=60,cwd=None,env=None,check=True):
+           with (private/(label+'.log')).open('wb') as log:
+            return subprocess.run(argv,stdout=log,stderr=subprocess.STDOUT,cwd=cwd,env=env,timeout=timeout,check=check)
+          def read_json(p):
+           assert p.is_file() and not p.is_symlink() and p.stat().st_size<=4*1024*1024
+           return json.loads(p.read_bytes())
+          def capture(argv):
+           return subprocess.check_output(argv,text=True,stderr=subprocess.DEVNULL,timeout=20).strip()
+          def containers():
+           return set(capture(['docker','ps','-aq']).split())
+          def pull_asset(path,size,digest,md5):
+           url='https://github.com/flyingwagner/scicode-verified/releases/download/data/'+path.name
+           proc=log_run(['curl','--fail','--silent','--show-error','--location','--proto','=https','--proto-redir','=https','--max-time','240','--max-filesize',str(size),url,'-o',str(path)],'download-'+path.name,250)
+           assert proc.returncode==0 and path.stat().st_size==size and sha(path)==digest
+           if md5:
+            with path.open('rb') as f: assert hashlib.file_digest(f,'md5').hexdigest()==md5
+           return {'bytes':size,'sha256':digest,'md5':md5}
+          def copy_file(cid,path,name):
+           target=private/name
+           proc=subprocess.run(['docker','cp',cid+':'+path,str(target)],capture_output=True,text=True,timeout=20)
+           if proc.returncode==0 and target.is_file() and not target.is_symlink() and target.stat().st_size<=4*1024*1024:return 'present',sha(target)
+           if proc.returncode and 'could not find the file' in proc.stderr.lower():return 'missing',None
+           return 'unavailable',None
+          def verify_runtime(name,before,folder,hdf5):
+           rows=[]
+           ids=containers()-before
+           for cid in ids:
+            detail=json.loads(capture(['docker','inspect',cid]))[0]
+            labels=detail['Config'].get('Labels') or {}
+            project=labels.get('com.docker.compose.project','')
+            if labels.get('com.docker.compose.service')!='main' or not project.startswith(name+'__'):continue
+            role='verifier' if '__verifier__' in project else 'agent'
+            hc=detail['HostConfig']
+            h5mounts=[m for m in detail['Mounts'] if m['Destination']=='/app/test_data.h5']
+            tests_probe,_=copy_file(cid,'/tests/test.sh',name+'-'+role+'-launcher')
+            solution_probe,solution_sha=copy_file(cid,'/app/solution.py',name+'-'+role+'-solution')
+            runtime_log_match={}
+            if role=='verifier':
+             for f in ('reward.json','metrics.json'):
+              state,digest=copy_file(cid,'/logs/verifier/'+f,name+'-verifier-'+f)
+              report=folder/'verifier'/f
+              runtime_log_match[f]=state=='present' and report.is_file() and not report.is_symlink() and digest==sha(report)
+            rows.append({'role':role,'container_id_prefix':cid[:12],'image_id':detail['Image'],'privileged':hc['Privileged'],'added_caps':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','input_hdf5_mount_count':len(h5mounts),'expected_hdf5_mount':len(h5mounts)==1 and not h5mounts[0]['RW'] and h5mounts[0]['Source']==str(hdf5),'tests_probe':tests_probe,'solution_probe':solution_probe,'solution_sha256':solution_sha,'runtime_log_match':runtime_log_match})
+           return rows
+          def verifier_deny(events,name):
+           count=0
+           for line in events:
+            try:event=json.loads(line)
+            except ValueError:continue
+            a=event.get('Actor',{}).get('Attributes',{})
+            action=event.get('Action','')
+            if action.startswith('exec_create:') and 'deny-all' in action and (a.get('com.docker.compose.project') or a.get('name','')).startswith(name+'__verifier__'):count+=1
+           return count
+          def grading(folder,expected,expected_sha):
+           result=read_json(folder/'result.json')
+           attempt={'exception_type':(result.get('exception_info') or {}).get('exception_type'),'harbor_reward':(result.get('verifier_result') or {}).get('rewards',{}).get('reward')}
+           if not all((folder/p).is_file() for p in ('verifier/reward.json','verifier/metrics.json','artifacts/manifest.json')):
+            return dict(attempt,accepted=False,status='missing_native_artifact_or_grader_evidence')
+           native=read_json(folder/'verifier/reward.json')
+           metrics=read_json(folder/'verifier/metrics.json')
+           rows=read_json(folder/'artifacts/manifest.json')
+           dest='artifacts/app/solution.py';file=folder/dest
+           items=[x for x in rows if x.get('source')=='/app/solution.py' and x.get('destination')==dest and x.get('status')=='ok' and x.get('type')=='file']
+           transfer=len(items)==1 and file.is_file() and not file.is_symlink() and sha(file)==expected_sha
+           good=expected==native.get('reward')==metrics.get('reward')==attempt['harbor_reward'] and metrics.get('md5_verified') is True and metrics.get('total_steps')==1 and metrics.get('steps_passed')==int(expected) and metrics.get('steps')==[{'step_number':'5.1','status':'PASS' if expected==1 else 'FAIL'}] and not attempt['exception_type']
+           return dict(attempt,accepted=good and transfer,status='scored' if good else 'score_or_integrity_mismatch',artifact_matches=transfer,metrics={k:metrics.get(k) for k in ('reward','steps_passed','total_steps','md5_verified','steps')})
+          def setup():
+           global stage
+           assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>8*1024**3
+           stage='verify_checkouts'
+           for folder,pin in [('adapter-source',adapter),('harbor-source',harbor)]:
+            assert capture(['git','-C',folder,'rev-parse','HEAD'])==pin
+           assert sha('harbor-source/uv.lock')=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960'
+           assert capture(['git','-C','harbor-source','hash-object','uv.lock'])=='372259f90db33a133db683070411c914aad0057b'
+           stage='apply_exact_migration'
+           patch=private/'migration.patch';patch.write_bytes(migration)
+           assert sha(patch)==migration_sha
+           assert not capture(['git','-C','adapter-source','status','--porcelain'])
+           log_run(['git','apply','--check','--whitespace=nowarn',str(patch)],'patch-check',cwd='adapter-source')
+           log_run(['git','apply','--whitespace=nowarn',str(patch)],'patch-apply',cwd='adapter-source')
+           assert set(capture(['git','-C','adapter-source','diff','--name-only']).splitlines())==set(package_hashes)
+           assert all(sha(P('adapter-source')/rel)==digest for rel,digest in package_hashes.items())
+           base=P('adapter-source/src/scicode-verified')
+           author=base/'oracles/5/solution.py'
+           assert sha(author)==author_sha and capture(['git','hash-object',str(author)])==author_blob
+           stage='dependencies'
+           log_run(['python3','-m','venv','bootstrap'],'bootstrap')
+           log_run(['bootstrap/bin/pip','install','uv==0.13.9'],'uv',120)
+           log_run([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],'sync',300,'harbor-source')
+           py=P('harbor-source/.venv/bin/python').resolve();cli=P('harbor-source/.venv/bin/harbor').resolve()
+           stage='official_release'
+           source=(private/'verified/scicode_verified');source.mkdir(parents=True)
+           summary['release_assets']={}
+           for filename,(size,hash256,md5) in assets.items():
+            summary['release_assets'][filename]=pull_asset(source/filename,size,hash256,md5)
+           manifest=read_json(source/'manifest.json')
+           assert manifest['version']=='v2' and manifest['h5_md5']==assets['test_data_cleaned.h5'][2] and manifest['problems_test_jsonl_md5']==assets['problems_test.jsonl'][2]
+           stage='generate_lanczos_only'
+           env=dict(os.environ,PYTHONPATH=str((base/'src').resolve()))
+           log_run([str(py),'-m','scicode_verified.main','--benchmark-dir',str(source.parent),'--output-dir','generated','--task-ids','5','--require-oracle'],'generate',75,env=env)
+           task=P('generated/scicode-verified-5').resolve()
+           assert [d.name for d in task.parent.iterdir() if d.is_dir()]==['scicode-verified-5']
+           cfg=tomllib.loads((task/'task.toml').read_text())
+           assert cfg['metadata']['scicode_problem_id']=='5' and cfg['artifacts']==['/app/solution.py']
+           assert cfg['verifier']['environment_mode']=='separate' and cfg['verifier']['network_mode']=='no-network'
+           assert not (task/'environment/docker-compose.yaml').exists()
+           assert (task/'tests/docker-compose.yaml').is_file() and (task/'tests/Dockerfile').is_file()
+           data=read_json(task/'tests/problem_data.json')
+           assert data['problem_id']=='5' and len(data['sub_steps'])==1
+           assert data['sub_steps'][0]['step_number']=='5.1' and len(data['sub_steps'][0]['test_cases'])==3
+           wrong=P('wrong/scicode-verified-5').resolve();shutil.copytree(task,wrong)
+           known=wrong/'solution/solve.sh'
+           known.write_text("#!/bin/bash\nset -euo pipefail\nmkdir -p /app\ncat > /app/solution.py <<'SCICODE_KNOWN_WRONG'\n"+wrong_code+"SCICODE_KNOWN_WRONG\n")
+           known.chmod(0o755)
+           for f in ('tests/test.sh','tests/test_outputs.py','tests/problem_data.json','task.toml'):
+            assert sha(task/f)==sha(wrong/f)
+           expect=lambda d:hashlib.sha256(d).hexdigest()
+           return cli,source/'test_data_cleaned.h5',[(task,'reference',1.0,expect((author.read_text().strip()+'\n').encode())),(wrong,'known-wrong',0.0,expect(wrong_code.encode()))]
+          stage='setup'
+          try:cli,hdf5,arms=setup()
+          except Exception as e:
+           summary['setup_failure']={'stage':stage,'type':type(e).__name__};arms=[]
+          for task,label,expected,expected_sha in arms:
+           row={'arm':label,'expected_reward':expected,'expected_solution_sha256':expected_sha}
+           summary['attempts'].append(row);before=set();events=None
+           if time.monotonic()-start>23*60:row['status']='not_run_budget';continue
+           name='scicode5-'+label;folder=P('trials').resolve()/name
+           try:
+            before=containers()
+            with (private/(name+'-events')).open('wb') as event_log:
+             events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=event_log,stderr=subprocess.DEVNULL)
+             env=dict(os.environ,HARBOR_SCICODE_VERIFIED_TEST_DATA_PATH=str(hdf5))
+             done=log_run([str(cli),'trials','start','--path',str(task),'--env','docker','--agent','oracle','--trial-name',name,'--trials-dir',str(folder.parent),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],name,650,env=env,check=False)
+             row['cli_exit']=done.returncode
+            row['native']=grading(folder,expected,expected_sha)
+            row['containers']=verify_runtime(name,before,folder,hdf5)
+           except Exception as e:row.update(status='runtime_or_evidence_error',error_type=type(e).__name__)
+           finally:
+            if events:
+             events.terminate()
+             try:events.wait(timeout=5)
+             except subprocess.TimeoutExpired:events.kill();events.wait()
+            f=private/(name+'-events')
+            row['verifier_deny_all_events']=verifier_deny(f.read_text(errors='replace').splitlines(),name) if f.is_file() else 0
+            c={x['role']:x for x in row.get('containers',[])}
+            row['isolation_accepted']=len(c)==2 and len(row['containers'])==2 and c['agent']['container_id_prefix']!=c['verifier']['container_id_prefix'] and c['agent']['image_id']!=c['verifier']['image_id'] and all(not x['privileged'] and not x['added_caps'] and not x['host_network'] and x['solution_sha256']==expected_sha for x in c.values()) and c['agent']['input_hdf5_mount_count']==0 and c['agent']['tests_probe']=='missing' and c['verifier']['expected_hdf5_mount'] and c['verifier']['tests_probe']=='present' and c['verifier']['runtime_log_match']=={'reward.json':True,'metrics.json':True} and row['verifier_deny_all_events']>0
+            row['accepted']=row.get('cli_exit')==0 and (row.get('native') or {}).get('accepted',False) and row['isolation_accepted']
+            if before or events:
+             for cid in containers()-before:
+              subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+          summary['accepted']=len(summary['attempts'])==2 and all(x.get('accepted') for x in summary['attempts'])
+          summary['seconds']=round(time.monotonic()-start,2)
+          print('SANITIZED_SUMMARY '+json.dumps(summary))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## SciCode-Verified #5 separate verifier\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+          if not summary['accepted']:raise SystemExit(1)
+          PY
