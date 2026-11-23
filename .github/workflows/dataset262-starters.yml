@@ -1,0 +1,522 @@
+name: Dataset 262 rebuilt starters
+'on':
+  push:
+    branches:
+    - diagnostic/dataset262-starters-20261123
+    paths:
+    - .github/workflows/dataset262-starters.yml
+permissions:
+  contents: read
+concurrency:
+  group: dataset262-starters
+  cancel-in-progress: false
+jobs:
+  lighthouse:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Check out exact adapter commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: joe1chief/adapters
+        ref: 9399d5399ec893b294220045186ca88d0ec2b1b4
+        path: adapter-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: Check out exact Harbor v0.27.0 commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: harbor-framework/harbor
+        ref: 96c86af3bc6d7e92f21fc771d21273be4714c8e9
+        path: harbor-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: lighthouse pinned dataset starter oracle and no-op
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE:?}"
+        export LIGHTHOUSE_PRIVATE_DIR="$(mktemp -d "${RUNNER_TEMP:?}/lighthouse1549.XXXXXXXX")"
+        trap 'rm -rf -- "$LIGHTHOUSE_PRIVATE_DIR"' EXIT
+        python3 - <<'PY'
+        import re,hashlib,json,os,pathlib,tomllib,platform,shutil,subprocess,time,urllib.request
+        P=pathlib.Path
+        start=time.monotonic();private=P(os.environ['LIGHTHOUSE_PRIVATE_DIR'])
+        adapter='9399d5399ec893b294220045186ca88d0ec2b1b4';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+        cases=[{'id': '1549', 'image': 'swebench/sweb.eval.x86_64.googlechrome_1776_lighthouse-1549@sha256:3612d5a8a0a4c78f24fa22b672619f18565cac40cdc4fdb0e50dfdb5e7ce5347', 'inputs': {'Dockerfile': '96565377ae322cf68419ebb17e813e08e49bfaacd1bb09bdb20780909df675ff', 'eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'problem_statement.md': 'f1c3dc4f250cff4fe725b09b08bf5c222c8e7652e5c6a5132c68007d7fec9281', 'task.yaml': '78645fb50a598cf61a751aa7f4af010adc4c0fb9199e7222472676d4fb0df057', 'test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da'}}]
+        summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Lighthouse 1549 dataset #262 rebuilt starter oracle/nop only; no instrumentation in generated task; no model parity','attempts':[]}
+        stage='setup'
+        def execute(argv,timeout=120,cwd=None):
+            with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+            if p.returncode:raise RuntimeError('command_nonzero')
+        def manifest_evidence(folder):
+            source='/tmp/harbor-submission/model.patch'
+            expected='artifacts/tmp/harbor-submission/model.patch'
+            manifest=folder/'artifacts/manifest.json'
+            if manifest.is_symlink() or not manifest.is_file():return {'manifest':'missing_or_invalid'}
+            try:
+                if manifest.stat().st_size>1048576:return {'manifest':'oversize'}
+                rows=json.loads(manifest.read_bytes())
+                if not isinstance(rows,list):return {'manifest':'invalid'}
+                rows=[r for r in rows if isinstance(r,dict) and r.get('source')==source]
+                if len(rows)!=1:return {'manifest':'valid','row':'missing' if not rows else 'duplicate'}
+                r=rows[0]
+                result={'manifest':'valid','row':'unique','status':r.get('status') if r.get('status') in ('ok','failed','empty','skipped') else 'other','type':r.get('type') if r.get('type') in ('file','directory') else 'other','expected_destination':r.get('destination')==expected}
+                if not result['expected_destination']:return result
+                p=folder/expected
+                if not p.resolve().is_relative_to((folder/'artifacts').resolve()) or any(x.is_symlink() for x in (p,*p.parents) if x!=folder and x.is_relative_to(folder)):
+                    result['file']='symlink_or_outside';return result
+                if not p.is_file():result['file']='missing_or_not_regular';return result
+                size=p.stat().st_size;result.update(file='regular',bytes=size)
+                if size<=4194304:result['sha256']=hashlib.sha256(p.read_bytes()).hexdigest()
+                return result
+            except (ValueError,OSError,TypeError,RuntimeError):
+                return {'manifest':'unreadable'}
+        def error_category(info):
+            text=json.dumps(info).lower()
+            if any(x in text for x in ['pull access denied','failed to resolve source metadata','failed to resolve reference']):return 'image_resolution'
+            if 'no space left on device' in text:return 'disk_exhausted'
+            if 'timed out' in text or 'timeout' in text:return 'timeout'
+            if 'docker compose' in text and 'build' in text:return 'compose_build'
+            if 'docker compose' in text and 'up' in text:return 'compose_start'
+            return 'unclassified_infrastructure'
+        def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+        def ids(kind):
+            cmd=['docker','ps','-aq'] if kind=='containers' else ['docker','image','ls','-q','--no-trunc']
+            return set(subprocess.check_output(cmd,text=True).split())
+        def cleanup_containers(before):
+            for cid in ids('containers')-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        setup_ok=False
+        try:
+            assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+            execute(['docker','compose','version'])
+            stage='verify_checkout_sha'
+            for repo_dir,expected in [('adapter-source',adapter),('harbor-source',harbor)]:
+                observed=subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()
+                if observed!=expected:raise RuntimeError('unexpected_checkout_commit')
+            summary['exact_checkouts_verified']=True
+            stage='verify_exact_checkout'
+            for repo_dir, expected in [('adapter-source',adapter),('harbor-source',harbor)]:
+                assert subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()==expected
+            assert subprocess.check_output(['git','-C','adapter-source','status','--porcelain=v1','--untracked-files=all'])==b''
+            summary['exact_checkouts_verified']=True
+            stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
+            execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+            py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
+        except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
+        for case in cases:
+            n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
+            case_summary={'task':n,'image':image,'source_sha256':case['inputs']};summary.setdefault('cases',[]).append(case_summary)
+            try:
+                if not setup_ok:raise RuntimeError('setup_incomplete')
+                if time.monotonic()-start>23*60:raise TimeoutError('budget')
+                if shutil.disk_usage('.').free<7*1024**3:raise OSError('insufficient_disk')
+                stage='public_inputs';td=P('task-source')/('GoogleChrome__lighthouse-'+n);td.mkdir(parents=True)
+                for name,digest in case['inputs'].items():
+                    dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                    url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/GoogleChrome__lighthouse-'+n+'/'+name
+                    with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                    assert sha(dest)==digest
+                stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+                with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','GoogleChrome__lighthouse-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
+                task=P('generated/googlechrome-lighthouse-'+n).resolve();assert task.is_dir()
+                for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/test.patch','test.patch'),('tests/tests.json','tests.json')]:assert sha(task/generated)==case['inputs'][original]
+                for public_asset in (f for f in case['inputs'] if f.startswith('problem_assets/')):
+                    assert sha(task/public_asset)==sha(task/'environment'/public_asset)==case['inputs'][public_asset]
+                stage='verify_uninstrumented_generated_task'
+                exact={'environment/Dockerfile': 'd69aa79ff70a52a22816834a89d0d95b5415bd92bf963d7e95089c90197a7dd9', 'environment/problem_assets/.gitkeep': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'environment/problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'environment/snapshot-and-collect.sh': '17adaa4dc5f3b80eea63dc05ad5e1e280fd1214c70cd79d70178d9b913e21c81', 'instruction.md': '0d48f33fab9f63a93a4232ed1084d650c709d9775de9e1fc0eee756c56f6cc68', 'problem_assets/0-27e874c6-8f15-11e6-9e6c-1a9407a64d14.png': '08ce0dd8939e619fe96360eb6a8adc368acbd70217096ddf5e97df16b738a0c7', 'solution/gold.patch': '5df9b0e82561b0080c5981ad8c0d13bf7392467e27a00671a97bd10a44a4f305', 'solution/solve.sh': 'f3ddb5b90bc837ba9cb552c7a6aa5dbea8fd48a62283a29c0692fbf2fc6a15ed', 'task.toml': '04317b299b66c23b223feed407282d2966b1efccb053aff14dc7dadc99297029', 'tests/SWEBENCH_LICENSE': '2bd2e08df7147f67a69b42c10efae09bd4bf119df397371036187d5dd1b02f57', 'tests/apply_submission.py': '2f9cacd5cf1f3596d5a63d278d8a9ae5be657a5ff22dbb0321523d6c6ef6af25', 'tests/eval.sh': 'e0e6b83ededb55e546a4e17b0904b9a7da47bdc13c89fc6895519e9bb3b5632f', 'tests/grade.py': 'ccf08f2d1de503999722669141caf4af9e9e92d06f85260973446ee1d6ff5808', 'tests/task_metadata.json': 'bf70f9bf32a46780670f271c9a940de2f4820f43189c14faed6e19c9f9add88f', 'tests/test.patch': '4c92b5224bc9c3abfb258022ee4bb00e394d9ab5b51d27772942a820ed1eb8a5', 'tests/test.sh': 'a6603ef4cf638605350073126512cd4b6c78f9dd5768af3d0071c8e3cae31fea', 'tests/tests.json': '7b8155f54c12e091a3e97d841b25308b6fdb5b7fc4ca398c2954622ff0a742da', 'tests/upstream.py': 'b6e50637352b17bbbec02315c0b26bac3da49693a24e508871ec5c052033f5c5'}
+                actual={f.relative_to(task).as_posix():sha(f) for f in task.rglob('*') if f.is_file()}
+                assert actual==exact, 'generated tree differs from local pinned build'
+                case_summary['exact_generated_sha256']=actual
+                assert (task/'environment/Dockerfile').read_text().splitlines()[0]=='FROM '+image
+                assert sha(td/'task.yaml')==case['inputs']['task.yaml']
+                task_config=tomllib.loads((task/'task.toml').read_text())
+                assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
+                assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
+                case_summary['task_toml_sha256']=sha(task/'task.toml')
+                stage='pull_fixed_image';execute(['docker','pull','--platform','linux/amd64',image],150)
+                detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert detail['Architecture']=='amd64' and detail['Os']=='linux' and detail['Id']=='sha256:164971a1f1e387e2fa30a450428e5667a19864e9035572b109a359a343073b69';case_summary['image_id']=detail['Id']
+                case_ok=True
+            except Exception as exc:case_summary.update(status='case_preflight_blocked',stage=stage,error_type=type(exc).__name__)
+            for agent in ['oracle','nop']:
+                attempt={'task':n,'agent':agent,'fresh_harbor_execution':False};summary['attempts'].append(attempt)
+                if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
+                if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
+                name='lighthouse'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                folder=P('trials')/name
+                attempt['log_recovery_accepted']=False
+                try:
+                    ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
+                    attempt['fresh_harbor_execution']=True
+                    # Keep only these ephemeral task containers for verifier evidence inspection.
+                    # Stock task config, egress helper and criteria remain unchanged.
+                    with (private/(name+'.log')).open('wb') as f:r=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=f,stderr=f,timeout=300)
+                    attempt['cli_exit']=r.returncode;folder=P('trials')/name
+                    if (folder/'result.json').is_file():
+                        result=json.loads((folder/'result.json').read_text());attempt['error_category']=error_category(result.get('exception_info')) if result.get('exception_info') else None;attempt['private_result_sha256']=sha(folder/'result.json');attempt['exception_type']=(result.get('exception_info') or {}).get('exception_type');attempt['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+                        report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                        source_path='/tmp/harbor-submission/model.patch'
+                        manifest=folder/'artifacts/manifest.json'
+                        proof=folder/'verifier/submission.json'
+                        evidence_ok=False
+                        if manifest.is_file() and proof.is_file():
+                            entries=[e for e in json.loads(manifest.read_text()) if e['source']==source_path and e['status']=='ok' and e['type']=='file']
+                            if len(entries)==1:
+                                actual=folder/entries[0]['destination']; assert actual.resolve().is_relative_to((folder/'artifacts').resolve())
+                                attestation=json.loads(proof.read_text())
+                                same=sha(actual)==attestation['submission_sha256']
+                                empty=actual.stat().st_size==0
+                                def patchid(p):
+                                    with p.open('rb') as stream:
+                                        out=subprocess.check_output(['git','patch-id','--stable'],stdin=stream,text=True).split()
+                                    return out[0] if len(out)==2 else None
+                                expected_patch=(actual.is_file() and not empty and patchid(actual) is not None and patchid(actual)==patchid(task/'solution/gold.patch')) if agent=='oracle' else empty
+                                evidence_ok=same and expected_patch and attestation['empty_submission']==empty and attestation['submission_bytes']==actual.stat().st_size and attestation['base_commit']=='e5fdadd8272ca456afb5dcd4b52c8e67f7d9e73c'
+                                attempt['submission']={'manifest_ok':True,'sha256':sha(actual),'bytes':actual.stat().st_size,'expected_patch':expected_patch,'verifier_digest_matches':same,'accepted':evidence_ok}
+                        if report.is_file() and reward.is_file():
+                            q=json.loads(report.read_text());v=float(reward.read_text().strip());expected=1.0 if agent=='oracle' else 0.0
+                            attempt.update(reward=v,resolved=q.get('resolved'),valid_test_output=q.get('valid_test_output'),per_test=q.get('tests_status'))
+                            declared=json.loads((task/'tests/tests.json').read_text())
+                            f2p=q['tests_status']['FAIL_TO_PASS'];p2p=q['tests_status']['PASS_TO_PASS']
+                            f2p_ok=(f2p['success']==declared['FAIL_TO_PASS'] and not f2p['failure']) if agent=='oracle' else (f2p['failure']==declared['FAIL_TO_PASS'] and not f2p['success'])
+                            buckets_ok=f2p_ok and len(declared['FAIL_TO_PASS'])==4 and p2p['success']==declared['PASS_TO_PASS'] and len(p2p['success'])==1 and not p2p['failure']
+                            attempt['status']='expected_semantic_result' if r.returncode==0 and evidence_ok and buckets_ok and v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                        else:attempt['status']='missing_exported_grading_evidence'
+                    else:attempt['status']='missing_harbor_result'
+                    output=folder/'verifier/test_output.log'
+                    if output.is_file() and output.stat().st_size>0:
+                        attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
+                except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                finally:
+                    containers=[]
+                    baseline_probe_errors=0
+                    def copied_hash(container_id, source_path, name):
+                        target=private/name
+                        process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
+                        if process.returncode==0 and target.is_file() and not target.is_symlink():return (sha(target),False)
+                        return (None,process.returncode!=0 and 'could not find the file' in process.stderr.lower())
+                    for cid in ids('containers')-before:
+                        d=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]
+                        labels=d['Config']['Labels'] or {}
+                        project=labels.get('com.docker.compose.project','')
+                        if labels.get('com.docker.compose.service')=='main' and project.startswith(name):
+                            hc=d['HostConfig']
+                            role='verifier' if '__verifier__' in project else 'agent'
+                            log_match={}
+                            if role=='verifier':
+                                attempt['runtime_evidence_present']={}
+                                for artifact in ('test_output.log','reward.txt','report.json','submission.json'):
+                                    exported=folder/'verifier'/artifact
+                                    digest,_=copied_hash(cid,'/logs/verifier/'+artifact,name+'-runtime-'+artifact)
+                                    attempt['runtime_evidence_present'][artifact]=digest is not None
+                                    log_match[artifact]=bool(digest and exported.is_file() and digest==sha(exported))
+                            control_hash,_=copied_hash(cid,'/testbed/package.json',name+'-'+role+'-control')
+                            probes={f:copied_hash(cid,'/tests/'+f,name+'-'+role+'-'+f) for f in ('test.sh','grade.py','tests.json','task_metadata.json')}
+                            if role=='agent':
+                                correct_test_visibility=control_hash is not None and all(missing for _,missing in probes.values())
+                            else:
+                                correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
+                            treefile=private/(name+'-'+role+'-baseline.tree')
+                            try:
+                                copied,_=copied_hash(cid,'/usr/local/share/harbor-lighthouse1549/baseline.tree',treefile.name)
+                                if copied is None or treefile.stat().st_size!=41:
+                                    tree_id=None
+                                else:
+                                    contents=treefile.read_bytes()
+                                    tree_id=contents[:-1].decode('ascii') if re.fullmatch(rb'[0-9a-f]{40}\n',contents) else None
+                                if tree_id is None:baseline_probe_errors+=1
+                            except (OSError,subprocess.TimeoutExpired):
+                                tree_id=None
+                                baseline_probe_errors+=1
+                            containers.append({'baseline_tree':tree_id,'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
+                    attempt['submission_transport']=manifest_evidence(folder)
+                    attempt['containers']=containers
+                    observed_trees=[c['baseline_tree'] for c in containers]
+                    common_tree=observed_trees[0] if len(observed_trees)==2 and observed_trees[0] is not None and observed_trees[0]==observed_trees[1] else None
+                    attempt['baseline_tree']=common_tree
+                    # Successful clean submission attestation follows the fail-closed baseline verification in the hashed launcher.
+                    attempt['verifier_preapply_baseline_check_completed']=bool((attempt.get('submission') or {}).get('accepted'))
+                    attempt['baseline_match_accepted']=common_tree is not None and attempt['verifier_preapply_baseline_check_completed']
+                    attempt['baseline_probe_errors']=baseline_probe_errors
+                    attempt['scoring_semantics_accepted']=attempt.get('status')=='expected_semantic_result'
+                    separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
+                    attempt['log_recovery_accepted']=bool(attempt.get('test_output_sha256')) and any(c['role']=='verifier' and c['runtime_logs_match_export'] for c in containers)
+                    attempt['separation_accepted']=separation
+                    if events:
+                        events.terminate()
+                        try:events.wait(timeout=5)
+                        except subprocess.TimeoutExpired:events.kill()
+                    if ef:ef.close()
+                    ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                    def is_verifier_deny_event(line):
+                        try:event=json.loads(line)
+                        except ValueError:return False
+                        attributes=event.get('Actor',{}).get('Attributes',{})
+                        action=event.get('Action','')
+                        project=attributes.get('com.docker.compose.project','')
+                        container_name=attributes.get('name','')
+                        target=project or container_name
+                        return action.startswith('exec_create:') and 'deny-all' in action and target.startswith(name+'__verifier__')
+                    attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
+                    attempt['verifier_deny_all_exec_events']=sum(is_verifier_deny_event(x) for x in et.splitlines())
+                    attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted'] and attempt['baseline_match_accepted']
+                    cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
+            if setup_ok:
+                for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+        summary['seconds']=round(time.monotonic()-start,2)
+        assert len(summary['attempts'])==2
+        summary['all_required_grades_accepted']=all(x.get('grading_accepted',False) for x in summary['attempts'])
+        summary['all_required_scoring_semantics_accepted']=all(x.get('scoring_semantics_accepted',False) for x in summary['attempts'])
+        tested_trees=[x.get('baseline_tree') for x in summary['attempts']]
+        summary['both_arms_same_frozen_baseline']=len(tested_trees)==2 and tested_trees[0] is not None and tested_trees[0]==tested_trees[1]
+        summary['diagnostic_accepted']=summary['all_required_grades_accepted'] and summary['both_arms_same_frozen_baseline']
+        summary['failure_marker']=None if summary['diagnostic_accepted'] else 'DIAGNOSTIC_NOT_ACCEPTED'
+        print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+        with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## Lighthouse 1549 exact-adapter Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full480 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+        if not summary['diagnostic_accepted']:raise SystemExit(1)
+        PY
+  grommet:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Check out exact adapter commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: joe1chief/adapters
+        ref: 9399d5399ec893b294220045186ca88d0ec2b1b4
+        path: adapter-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: Check out exact Harbor v0.27.0 commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: harbor-framework/harbor
+        ref: 96c86af3bc6d7e92f21fc771d21273be4714c8e9
+        path: harbor-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: grommet pinned dataset starter oracle and no-op
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import hashlib,json,os,pathlib,tomllib,platform,shutil,subprocess,time,urllib.request
+        P=pathlib.Path
+        start=time.monotonic();private=P('private-run-data');private.mkdir()
+        adapter='9399d5399ec893b294220045186ca88d0ec2b1b4';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+        cases=[{'id': '2061', 'image': 'swebench/sweb.eval.x86_64.grommet_1776_grommet-2061@sha256:0fee0191d949f36b76327594ce4dd26200fa4fdbe1198838e62f0b8f909e299f', 'inputs': {'test.patch': 'a32a2d052bb7ed80c43a61d308b6619fa9c00da6e317261c31ac9cc24e0b6a2e', 'problem_statement.md': '70018808a6a7c537ebe63e5d328ccd3e3f1cb77cebe9b9dc330fdbc925b86916', 'eval.sh': '740ca83b10f1f138ab71041cdcda5c66f5a4e32c1913868af38e42440469b80e', 'tests.json': '074592f772eba264af0360a7e295dd5202a3b5bfd6ca8c0529a0d7c334e81bac', 'Dockerfile': '113c7af5c585b9ba4ea9bf3f397ecbbd2c40ee2269df247d6f6d82daf4302470', 'gold.patch': '01d722cb72d3fbc9437611694f3a6b52a941d07cf1e308b07c3e8398ac72f10d', 'task.yaml': '3bcc0a2032012dac7d08c03977fa84ce4856aa85374929487c4626acfa94bd79', 'problem_assets/1-38843203-e689b1b0-41bb-11e8-87ca-5b9c727300e8.jpg': '15a2c34122b04725a528b15f32868ee094aa267b3ef122331afff36388b44f88', 'problem_assets/0-38843188-d0a0325c-41bb-11e8-8357-c686034af89d.jpg': '12e3f10646b83283adf5ead750f2788172b823c11300ef8f97274a01386d0b43'}}]
+        summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'Grommet 2061 original oracle/nop only, not full480 or model parity','attempts':[]}
+        stage='setup'
+        def execute(argv,timeout=120,cwd=None):
+            with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+            if p.returncode:raise RuntimeError('command_nonzero')
+        def error_category(info):
+            text=json.dumps(info).lower()
+            if any(x in text for x in ['pull access denied','failed to resolve source metadata','failed to resolve reference']):return 'image_resolution'
+            if 'no space left on device' in text:return 'disk_exhausted'
+            if 'timed out' in text or 'timeout' in text:return 'timeout'
+            if 'docker compose' in text and 'build' in text:return 'compose_build'
+            if 'docker compose' in text and 'up' in text:return 'compose_start'
+            return 'unclassified_infrastructure'
+        def dependency_snapshot(cid,label):
+            result={}
+            for name,path in [('package','/testbed/package.json'),('lock','/testbed/yarn.lock'),('integrity','/testbed/node_modules/.yarn-integrity')]:
+                dest=private/(label+'-'+name)
+                rc=subprocess.run(['docker','cp',cid+':'+path,str(dest)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15).returncode
+                result[name+'_sha256']=sha(dest) if rc==0 else None
+                if rc==0 and name=='integrity':
+                    try:
+                        data=json.loads(dest.read_text());result['integrity_top_level_count']=len(data.get('topLevelPatterns',[]));result['integrity_lock_entries_count']=len(data.get('lockfileEntries',{}))
+                    except ValueError:result['integrity_parse_error']=True
+            return result
+        def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+        def ids(kind):
+            cmd=['docker','ps','-aq'] if kind=='containers' else ['docker','image','ls','-q','--no-trunc']
+            return set(subprocess.check_output(cmd,text=True).split())
+        def cleanup_containers(before):
+            for cid in ids('containers')-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        setup_ok=False
+        try:
+            assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+            execute(['docker','compose','version'])
+            stage='verify_exact_checkout'
+            for repo_dir, expected in [('adapter-source',adapter),('harbor-source',harbor)]:
+                assert subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()==expected
+            assert subprocess.check_output(['git','-C','adapter-source','status','--porcelain=v1','--untracked-files=all'])==b''
+            summary['exact_checkouts_verified']=True
+            stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
+            execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+            py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
+        except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
+        for case in cases:
+            n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
+            case_summary={'task':n,'image':image,'source_sha256':case['inputs']};summary.setdefault('cases',[]).append(case_summary)
+            try:
+                if not setup_ok:raise RuntimeError('setup_incomplete')
+                if time.monotonic()-start>23*60:raise TimeoutError('budget')
+                if shutil.disk_usage('.').free<7*1024**3:raise OSError('insufficient_disk')
+                stage='public_inputs';td=P('task-source')/('grommet__grommet-'+n);td.mkdir(parents=True)
+                for name,digest in case['inputs'].items():
+                    dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                    url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/grommet__grommet-'+n+'/'+name
+                    with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                    assert sha(dest)==digest
+                stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+                with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','grommet__grommet-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
+                task=P('generated/grommet-grommet-'+n).resolve();assert task.is_dir()
+                for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/tests.json','tests.json')]:assert sha(task/generated)==case['inputs'][original]
+                exact={'environment/Dockerfile': 'b9cc203d74c219a49815da20e859431c7147d16e05df6f87911db34fbaa768c0', 'environment/problem_assets/.gitkeep': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'environment/problem_assets/0-38843188-d0a0325c-41bb-11e8-8357-c686034af89d.jpg': '12e3f10646b83283adf5ead750f2788172b823c11300ef8f97274a01386d0b43', 'environment/problem_assets/1-38843203-e689b1b0-41bb-11e8-87ca-5b9c727300e8.jpg': '15a2c34122b04725a528b15f32868ee094aa267b3ef122331afff36388b44f88', 'instruction.md': 'd038eb98b11763375ff20ff0cc825e021ca197c6e9c55b8e80ac27514911b203', 'problem_assets/0-38843188-d0a0325c-41bb-11e8-8357-c686034af89d.jpg': '12e3f10646b83283adf5ead750f2788172b823c11300ef8f97274a01386d0b43', 'problem_assets/1-38843203-e689b1b0-41bb-11e8-87ca-5b9c727300e8.jpg': '15a2c34122b04725a528b15f32868ee094aa267b3ef122331afff36388b44f88', 'solution/gold.patch': '01d722cb72d3fbc9437611694f3a6b52a941d07cf1e308b07c3e8398ac72f10d', 'solution/solve.sh': 'f3ddb5b90bc837ba9cb552c7a6aa5dbea8fd48a62283a29c0692fbf2fc6a15ed', 'task.toml': '0ffe29e53d4ef60e8e2469e065bad7871625969517b785ccab636477bd1bd53b', 'tests/SWEBENCH_LICENSE': '2bd2e08df7147f67a69b42c10efae09bd4bf119df397371036187d5dd1b02f57', 'tests/apply_submission.py': '2f9cacd5cf1f3596d5a63d278d8a9ae5be657a5ff22dbb0321523d6c6ef6af25', 'tests/eval.sh': '740ca83b10f1f138ab71041cdcda5c66f5a4e32c1913868af38e42440469b80e', 'tests/grade.py': 'ccf08f2d1de503999722669141caf4af9e9e92d06f85260973446ee1d6ff5808', 'tests/task_metadata.json': '0a57b12928959f0eb1b2f662fe139e4445b521ec8e284915651f716a32a4b4b5', 'tests/test.patch': 'a32a2d052bb7ed80c43a61d308b6619fa9c00da6e317261c31ac9cc24e0b6a2e', 'tests/test.sh': 'f08b1cf1182a684ad03335a3d06d7a3dfa379f7d25eeac35ac654219a5889b98', 'tests/tests.json': '074592f772eba264af0360a7e295dd5202a3b5bfd6ca8c0529a0d7c334e81bac', 'tests/upstream.py': 'b6e50637352b17bbbec02315c0b26bac3da49693a24e508871ec5c052033f5c5'}
+                actual={f.relative_to(task).as_posix():sha(f) for f in task.rglob('*') if f.is_file()}
+                assert actual==exact, 'generated tree differs from local pinned build'
+                case_summary['exact_generated_sha256']=actual
+                run_task=P('run-only')/task.name
+                shutil.copytree(task,run_task)
+                dockerfile=run_task/'environment/Dockerfile'
+                docker_text=dockerfile.read_text()
+                mutable='FROM '+image.split('@',1)[0]+':latest\n'
+                assert docker_text.count(mutable)==1
+                dockerfile.write_text(docker_text.replace(mutable,'FROM '+image+'\n',1))
+                run_hashes={f.relative_to(run_task).as_posix():sha(f) for f in run_task.rglob('*') if f.is_file()}
+                assert run_hashes.keys()==exact.keys() and [k for k in exact if run_hashes[k]!=exact[k]]==['environment/Dockerfile']
+                case_summary['runtime_only_dockerfile_sha256']=run_hashes['environment/Dockerfile']
+                task=run_task.resolve()
+                task_config=tomllib.loads((task/'task.toml').read_text())
+                assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
+                assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
+                case_summary['task_toml_sha256']=sha(task/'task.toml')
+                stage='pull_fixed_image';execute(['docker','pull','--platform','linux/amd64',image],150)
+                detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert detail['Architecture']=='amd64' and detail['Os']=='linux';case_summary['image_id']=detail['Id']
+                base_container=subprocess.check_output(['docker','create','--network','none',image],text=True).strip()
+                try:case_summary['baseline_dependency_snapshot']=dependency_snapshot(base_container,'baseline')
+                finally:execute(['docker','rm',base_container])
+                case_ok=True
+            except Exception as exc:case_summary.update(status='case_preflight_blocked',stage=stage,error_type=type(exc).__name__)
+            for agent in ['oracle','nop']:
+                attempt={'task':n,'agent':agent,'fresh_harbor_execution':False};summary['attempts'].append(attempt)
+                if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
+                if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
+                name='grommet'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                folder=P('trials')/name
+                attempt['log_recovery_accepted']=False
+                try:
+                    ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
+                    attempt['fresh_harbor_execution']=True
+                    # Keep only these ephemeral task containers for post-verifier dependency inspection.
+                    # Stock task config, egress helper and criteria remain unchanged.
+                    with (private/(name+'.log')).open('wb') as f:r=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=f,stderr=f,timeout=300)
+                    attempt['cli_exit']=r.returncode;folder=P('trials')/name
+                    if (folder/'result.json').is_file():
+                        result=json.loads((folder/'result.json').read_text());attempt['error_category']=error_category(result.get('exception_info')) if result.get('exception_info') else None;attempt['private_result_sha256']=sha(folder/'result.json');attempt['exception_type']=(result.get('exception_info') or {}).get('exception_type');attempt['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+                        report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                        source_path='/tmp/harbor-submission/model.patch'
+                        manifest=folder/'artifacts/manifest.json'
+                        proof=folder/'verifier/submission.json'
+                        evidence_ok=False
+                        if manifest.is_file() and proof.is_file():
+                            entries=[e for e in json.loads(manifest.read_text()) if e['source']==source_path and e['status']=='ok' and e['type']=='file']
+                            if len(entries)==1:
+                                actual=folder/entries[0]['destination']; assert actual.resolve().is_relative_to((folder/'artifacts').resolve())
+                                attestation=json.loads(proof.read_text())
+                                same=sha(actual)==attestation['submission_sha256']
+                                empty=actual.stat().st_size==0
+                                def patchid(p):
+                                    with p.open('rb') as stream:
+                                        out=subprocess.check_output(['git','patch-id','--stable'],stdin=stream,text=True).split()
+                                    return out[0] if len(out)==2 else None
+                                expected_patch=(actual.is_file() and not empty and patchid(actual) is not None and patchid(actual)==patchid(task/'solution/gold.patch')) if agent=='oracle' else empty
+                                evidence_ok=same and expected_patch and attestation['empty_submission']==empty and attestation['submission_bytes']==actual.stat().st_size and attestation['base_commit']=='279b3ec2fa343c4f875a955c35ab9cce5ed063f0'
+                                attempt['submission']={'manifest_ok':True,'sha256':sha(actual),'bytes':actual.stat().st_size,'expected_patch':expected_patch,'verifier_digest_matches':same,'accepted':evidence_ok}
+                        if report.is_file() and reward.is_file():
+                            q=json.loads(report.read_text());v=float(reward.read_text().strip());expected=1.0 if agent=='oracle' else 0.0
+                            attempt.update(reward=v,resolved=q.get('resolved'),valid_test_output=q.get('valid_test_output'),per_test=q.get('tests_status'))
+                            declared=json.loads((task/'tests/tests.json').read_text())
+                            f2p=q['tests_status']['FAIL_TO_PASS'];p2p=q['tests_status']['PASS_TO_PASS']
+                            f2p_ok=(f2p['success']==declared['FAIL_TO_PASS'] and not f2p['failure']) if agent=='oracle' else (f2p['failure']==declared['FAIL_TO_PASS'] and not f2p['success'])
+                            buckets_ok=f2p_ok and len(declared['FAIL_TO_PASS'])==3 and p2p['success']==declared['PASS_TO_PASS'] and len(p2p['success'])==36 and not p2p['failure']
+                            attempt['status']='expected_semantic_result' if r.returncode==0 and evidence_ok and buckets_ok and v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                        else:attempt['status']='missing_exported_grading_evidence'
+                    else:attempt['status']='missing_harbor_result'
+                    output=folder/'verifier/test_output.log'
+                    if output.is_file() and output.stat().st_size>0:
+                        attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
+                except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                finally:
+                    # Read JSON only, do not load dependency code or call npm/yarn beyond original eval.
+                    dependency=[]
+                    for cid in ids('containers')-before:
+                        snap=dependency_snapshot(cid,name+'-'+cid[:12])
+                        if snap['package_sha256'] is not None:dependency.append(snap)
+                    attempt['post_verifier_dependency_snapshots']=dependency
+                    baseline=case_summary['baseline_dependency_snapshot']
+                    containers=[]
+                    def copied_hash(container_id, source_path, name):
+                        target=private/name
+                        process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
+                        if process.returncode==0 and target.is_file() and not target.is_symlink():return (sha(target),False)
+                        return (None,process.returncode!=0 and 'could not find the file' in process.stderr.lower())
+                    for cid in ids('containers')-before:
+                        d=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]
+                        labels=d['Config']['Labels'] or {}
+                        project=labels.get('com.docker.compose.project','')
+                        if labels.get('com.docker.compose.service')=='main' and project.startswith(name):
+                            hc=d['HostConfig']
+                            role='verifier' if '__verifier__' in project else 'agent'
+                            log_match={}
+                            if role=='verifier':
+                                for artifact in ('test_output.log','reward.txt','report.json','submission.json'):
+                                    exported=folder/'verifier'/artifact
+                                    digest,_=copied_hash(cid,'/logs/verifier/'+artifact,name+'-runtime-'+artifact)
+                                    log_match[artifact]=bool(digest and exported.is_file() and digest==sha(exported))
+                            control_hash,_=copied_hash(cid,'/testbed/package.json',name+'-'+role+'-control')
+                            probes={f:copied_hash(cid,'/tests/'+f,name+'-'+role+'-'+f) for f in ('test.sh','grade.py','tests.json','task_metadata.json')}
+                            if role=='agent':
+                                correct_test_visibility=control_hash is not None and all(missing for _,missing in probes.values())
+                            else:
+                                correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
+                            containers.append({'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
+                    attempt['containers']=containers
+                    separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
+                    attempt['log_recovery_accepted']=bool(attempt.get('test_output_sha256')) and any(c['role']=='verifier' and c['runtime_logs_match_export'] for c in containers)
+                    attempt['separation_accepted']=separation
+                    attempt['manifest_lock_unchanged']=len(dependency)==2 and all(baseline.get(k) is not None and all(s.get(k)==baseline[k] for s in dependency) for k in ['package_sha256','lock_sha256'])
+                    attempt['integrity_record_unchanged']=len(dependency)==2 and baseline.get('integrity_sha256') is not None and all(s.get('integrity_sha256')==baseline['integrity_sha256'] for s in dependency)
+                    attempt['installed_transitive_versions_verified']=False
+                    attempt['dependency_evidence_scope']='Manifest, lock and Yarn integrity record hashes only; not installed-files closure or installer exit status'
+                    if events:
+                        events.terminate()
+                        try:events.wait(timeout=5)
+                        except subprocess.TimeoutExpired:events.kill()
+                    if ef:ef.close()
+                    ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                    def is_verifier_deny_event(line):
+                        try:event=json.loads(line)
+                        except ValueError:return False
+                        attributes=event.get('Actor',{}).get('Attributes',{})
+                        action=event.get('Action','')
+                        project=attributes.get('com.docker.compose.project','')
+                        container_name=attributes.get('name','')
+                        target=project or container_name
+                        return action.startswith('exec_create:') and 'deny-all' in action and target.startswith(name+'__verifier__')
+                    attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
+                    attempt['verifier_deny_all_exec_events']=sum(is_verifier_deny_event(x) for x in et.splitlines())
+                    attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted']
+                    attempt['static_dependency_alignment_accepted']=attempt['manifest_lock_unchanged'] and attempt['integrity_record_unchanged']
+                    cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
+            if setup_ok:
+                for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+        summary['seconds']=round(time.monotonic()-start,2)
+        assert len(summary['attempts'])==2
+        summary['all_required_grades_accepted']=all(x.get('grading_accepted',False) for x in summary['attempts'])
+        summary['all_required_static_dependency_checks_accepted']=all(x.get('static_dependency_alignment_accepted',False) for x in summary['attempts'])
+        summary['diagnostic_accepted']=summary['all_required_grades_accepted'] and summary['all_required_static_dependency_checks_accepted']
+        summary['failure_marker']=None if summary['diagnostic_accepted'] else 'DIAGNOSTIC_NOT_ACCEPTED'
+        print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+        with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## Grommet 2061 exact-adapter Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full480 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+        if not summary['diagnostic_accepted']:raise SystemExit(1)
+        PY
