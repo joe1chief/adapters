@@ -1,0 +1,234 @@
+name: Dataset 262 OpenLayers 14483
+'on':
+  push:
+    branches:
+    - diagnostic/dataset262-openlayers14483-20261123
+    paths:
+    - .github/workflows/dataset262-openlayers14483.yml
+permissions:
+  contents: read
+jobs:
+  openlayers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Check out exact adapter commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: joe1chief/adapters
+        ref: 9399d5399ec893b294220045186ca88d0ec2b1b4
+        path: adapter-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: Check out exact Harbor v0.27.0 commit
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      with:
+        repository: harbor-framework/harbor
+        ref: 96c86af3bc6d7e92f21fc771d21273be4714c8e9
+        path: harbor-source
+        persist-credentials: false
+        fetch-depth: 1
+        show-progress: false
+    - name: OpenLayers 14483 reference and empty-submission checks
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import re,hashlib,json,os,pathlib,tomllib,platform,shutil,subprocess,time,urllib.request
+        P=pathlib.Path
+        start=time.monotonic();private=P('private-run-data');private.mkdir()
+        adapter='9399d5399ec893b294220045186ca88d0ec2b1b4';harbor='96c86af3bc6d7e92f21fc771d21273be4714c8e9';source='8d3ed32f37af9ceb8b5778b92a0088384ed057d4'
+        cases=[{'id': '14483', 'image': 'swebench/sweb.eval.x86_64.openlayers_1776_openlayers-14483@sha256:5449d397d80505b6dbf387193cc60ae10617d5ec42cf0770caa22a55de9a5e28', 'inputs': {'Dockerfile': 'f9a048d694b220ebf36e606175c58dc9024904c6d48570cc6b9c8e4e78ed2ed1', 'eval.sh': '5b1a64887c606f4062b6c5165b5926f9e987b0557e829aa91c3e31f1b77f50c6', 'gold.patch': '913c768e30b5230f2ec511c284574749da9e00fbe5cc5fa4bd16ade3d174cf40', 'problem_assets/0-216621447-8f905a89-4cb3-4970-88d8-8d1d516e8153.png': '22511123985758c239b87203b245e2e9d0597baa880be6a0fe6aaa468f63ebb1', 'problem_assets/1-216622459-c59a58e7-f3f2-418c-97e8-c81b690aa26f.png': 'f976a200cc2c34702afe127c4a646f89e3543b3616eb703fdc04d14c9307a045', 'problem_assets/2-216623973-d556937d-aec9-41e2-b1c8-bc57932f85b6.png': 'df8b8ccc8e753a4aada38cbecac80fd2530cb9573f51067dd92dd534d2ba5969', 'problem_assets/codesandbox/index.html': '7379a3dea5954413187af49e48628d582a3bb3da0058994f113a321f581f3ceb', 'problem_assets/codesandbox/package.json': '04dd5bf7f9138bd829d7a7bff55397853959c0e21f1042f2e23de9714b4a8f6f', 'problem_assets/codesandbox/src/index.js': '1be8d3b3e9b046c1dc3422c263a1d21d8b561c2bf46904f2ac4fedf02ef555f3', 'problem_assets/codesandbox/src/opaqueTile.png': '02c987dbc37c396a6aff42d2f7872d0f5e6b9bf39c013e00531b6309c8adea92', 'problem_assets/codesandbox/src/styles.css': 'ce2f49474c399984f3847e80319e50f2f8f2251b8e9b977c130532a585f43ed7', 'problem_statement.md': '80fc6d1756aacd3d01a203983f5317701b9defcda58ca52d0bab36404f680c28', 'task.yaml': '6fb34df297c519a8e98d48110918e5ec27fbe027bf3a917a04e6ed5683ae1077', 'test.patch': 'bf1c16fff0644c2413d250a32b30348acdf2f1e08e2be5ba6af1a73cf4949327', 'tests.json': '6334746903df2c79c43f82aae8b0238513c6d8bffa6cea49675abc6b2d747e77'}}]
+        summary={'adapter_commit':adapter,'harbor_commit':harbor,'task_source_commit':source,'model_calls':0,'scope':'OpenLayers 14483 original oracle/nop only, not full480 or model parity','attempts':[]}
+        stage='setup'
+        def execute(argv,timeout=120,cwd=None):
+            with (private/'setup.log').open('ab') as f:p=subprocess.run(argv,cwd=cwd,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+            if p.returncode:raise RuntimeError('command_nonzero')
+        def error_category(info):
+            text=json.dumps(info).lower()
+            if any(x in text for x in ['pull access denied','failed to resolve source metadata','failed to resolve reference']):return 'image_resolution'
+            if 'no space left on device' in text:return 'disk_exhausted'
+            if 'timed out' in text or 'timeout' in text:return 'timeout'
+            if 'docker compose' in text and 'build' in text:return 'compose_build'
+            if 'docker compose' in text and 'up' in text:return 'compose_start'
+            return 'unclassified_infrastructure'
+        def sha(p):return hashlib.sha256(P(p).read_bytes()).hexdigest()
+        def ids(kind):
+            cmd=['docker','ps','-aq'] if kind=='containers' else ['docker','image','ls','-q','--no-trunc']
+            return set(subprocess.check_output(cmd,text=True).split())
+        def cleanup_containers(before):
+            for cid in ids('containers')-before:subprocess.run(['docker','rm','-f',cid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        setup_ok=False
+        try:
+            assert platform.machine()=='x86_64' and shutil.disk_usage('.').free>9*1024**3
+            execute(['docker','compose','version'])
+            stage='verify_exact_checkout'
+            for repo_dir, expected in [('adapter-source',adapter),('harbor-source',harbor)]:
+                assert subprocess.check_output(['git','-C',repo_dir,'rev-parse','--verify','HEAD'],text=True).strip()==expected
+            assert subprocess.check_output(['git','-C','adapter-source','status','--porcelain=v1','--untracked-files=all'])==b''
+            summary['exact_checkouts_verified']=True
+            stage='locked_dependencies';execute(['python3','-m','venv','bootstrap']);execute(['bootstrap/bin/pip','install','uv==0.13.9'],120)
+            execute([str(P('bootstrap/bin/uv').resolve()),'sync','--frozen','--no-dev','--python','3.12'],420,'harbor-source')
+            py=str(P('harbor-source/.venv/bin/python').resolve());cli=str(P('harbor-source/.venv/bin/harbor').resolve());summary['harbor_lock_sha256']=sha('harbor-source/uv.lock');assert summary['harbor_lock_sha256']=='d411f1b7d259023d8ec2f920d7b8faedcf3b895e2320c2c0b5a606f3e1c2b960';assert subprocess.check_output(['git','hash-object','uv.lock'],cwd='harbor-source',text=True).strip()=='372259f90db33a133db683070411c914aad0057b';setup_ok=True
+        except Exception as exc:summary['setup_error']={'stage':stage,'error_type':type(exc).__name__}
+        for case in cases:
+            n=case['id'];image=case['image'];case_ok=False;before_images=ids('images') if setup_ok else set()
+            case_summary={'task':n,'image':image,'source_sha256':case['inputs']};summary.setdefault('cases',[]).append(case_summary)
+            try:
+                if not setup_ok:raise RuntimeError('setup_incomplete')
+                if time.monotonic()-start>23*60:raise TimeoutError('budget')
+                if shutil.disk_usage('.').free<7*1024**3:raise OSError('insufficient_disk')
+                stage='public_inputs';td=P('task-source')/('openlayers__openlayers-'+n);td.mkdir(parents=True)
+                for name,digest in case['inputs'].items():
+                    dest=td/name;dest.parent.mkdir(parents=True,exist_ok=True)
+                    url='https://raw.githubusercontent.com/SWE-bench/swe-bench-multimodal-tasks/'+source+'/tasks/openlayers__openlayers-'+n+'/'+name
+                    with urllib.request.urlopen(url,timeout=40) as r:dest.write_bytes(r.read())
+                    assert sha(dest)==digest
+                stage='generate_exact_adapter';env=dict(os.environ);env['PYTHONPATH']=str(P('adapter-source/src/swebench-multimodal/src').resolve())
+                with (private/(n+'-generation.log')).open('wb') as f:subprocess.run([py,'-m','swebench_multimodal.main','--source-dir','task-source','--output-dir','generated','--task-ids','openlayers__openlayers-'+n],env=env,stdout=f,stderr=f,check=True,timeout=60)
+                task=P('generated/openlayers-openlayers-'+n).resolve();assert task.is_dir()
+                for generated,original in [('tests/eval.sh','eval.sh'),('solution/gold.patch','gold.patch'),('tests/tests.json','tests.json'),('tests/test.patch','test.patch')]:assert sha(task/generated)==case['inputs'][original]
+                exact={'environment/Dockerfile': 'f39a714a59e1e44fac69f8efee35e29952d8077c4d8d65a3994d02a523158151', 'environment/problem_assets/.gitkeep': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'environment/problem_assets/0-216621447-8f905a89-4cb3-4970-88d8-8d1d516e8153.png': '22511123985758c239b87203b245e2e9d0597baa880be6a0fe6aaa468f63ebb1', 'environment/problem_assets/1-216622459-c59a58e7-f3f2-418c-97e8-c81b690aa26f.png': 'f976a200cc2c34702afe127c4a646f89e3543b3616eb703fdc04d14c9307a045', 'environment/problem_assets/2-216623973-d556937d-aec9-41e2-b1c8-bc57932f85b6.png': 'df8b8ccc8e753a4aada38cbecac80fd2530cb9573f51067dd92dd534d2ba5969', 'environment/problem_assets/codesandbox/index.html': '7379a3dea5954413187af49e48628d582a3bb3da0058994f113a321f581f3ceb', 'environment/problem_assets/codesandbox/package.json': '04dd5bf7f9138bd829d7a7bff55397853959c0e21f1042f2e23de9714b4a8f6f', 'environment/problem_assets/codesandbox/src/index.js': '1be8d3b3e9b046c1dc3422c263a1d21d8b561c2bf46904f2ac4fedf02ef555f3', 'environment/problem_assets/codesandbox/src/opaqueTile.png': '02c987dbc37c396a6aff42d2f7872d0f5e6b9bf39c013e00531b6309c8adea92', 'environment/problem_assets/codesandbox/src/styles.css': 'ce2f49474c399984f3847e80319e50f2f8f2251b8e9b977c130532a585f43ed7', 'instruction.md': '3187d00ee51417e76927b063c0d8af34add2b72f375ad5254d1f9c4e7ba744dc', 'problem_assets/0-216621447-8f905a89-4cb3-4970-88d8-8d1d516e8153.png': '22511123985758c239b87203b245e2e9d0597baa880be6a0fe6aaa468f63ebb1', 'problem_assets/1-216622459-c59a58e7-f3f2-418c-97e8-c81b690aa26f.png': 'f976a200cc2c34702afe127c4a646f89e3543b3616eb703fdc04d14c9307a045', 'problem_assets/2-216623973-d556937d-aec9-41e2-b1c8-bc57932f85b6.png': 'df8b8ccc8e753a4aada38cbecac80fd2530cb9573f51067dd92dd534d2ba5969', 'problem_assets/codesandbox/index.html': '7379a3dea5954413187af49e48628d582a3bb3da0058994f113a321f581f3ceb', 'problem_assets/codesandbox/package.json': '04dd5bf7f9138bd829d7a7bff55397853959c0e21f1042f2e23de9714b4a8f6f', 'problem_assets/codesandbox/src/index.js': '1be8d3b3e9b046c1dc3422c263a1d21d8b561c2bf46904f2ac4fedf02ef555f3', 'problem_assets/codesandbox/src/opaqueTile.png': '02c987dbc37c396a6aff42d2f7872d0f5e6b9bf39c013e00531b6309c8adea92', 'problem_assets/codesandbox/src/styles.css': 'ce2f49474c399984f3847e80319e50f2f8f2251b8e9b977c130532a585f43ed7', 'solution/gold.patch': '913c768e30b5230f2ec511c284574749da9e00fbe5cc5fa4bd16ade3d174cf40', 'solution/solve.sh': 'f3ddb5b90bc837ba9cb552c7a6aa5dbea8fd48a62283a29c0692fbf2fc6a15ed', 'task.toml': '4253631414411982672e54c45f72933d2d7103e2f1dcb4e3e72b2c1d70e0feff', 'tests/SWEBENCH_LICENSE': '2bd2e08df7147f67a69b42c10efae09bd4bf119df397371036187d5dd1b02f57', 'tests/apply_submission.py': '2f9cacd5cf1f3596d5a63d278d8a9ae5be657a5ff22dbb0321523d6c6ef6af25', 'tests/eval.sh': '5b1a64887c606f4062b6c5165b5926f9e987b0557e829aa91c3e31f1b77f50c6', 'tests/grade.py': 'ccf08f2d1de503999722669141caf4af9e9e92d06f85260973446ee1d6ff5808', 'tests/task_metadata.json': 'c42b55ac64f12ea83f79507ffcb5b3d9e9affa97e2749b2fda605ba50cf10ef9', 'tests/test.patch': 'bf1c16fff0644c2413d250a32b30348acdf2f1e08e2be5ba6af1a73cf4949327', 'tests/test.sh': 'f08b1cf1182a684ad03335a3d06d7a3dfa379f7d25eeac35ac654219a5889b98', 'tests/tests.json': '6334746903df2c79c43f82aae8b0238513c6d8bffa6cea49675abc6b2d747e77', 'tests/upstream.py': 'b6e50637352b17bbbec02315c0b26bac3da49693a24e508871ec5c052033f5c5'}
+                actual={f.relative_to(task).as_posix():sha(f) for f in task.rglob('*') if f.is_file()}
+                assert actual==exact, 'generated tree differs from local pinned build'
+                case_summary['exact_generated_sha256']=actual
+                run_task=P('run-only')/task.name
+                shutil.copytree(task,run_task)
+                dockerfile=run_task/'environment/Dockerfile'
+                docker_text=dockerfile.read_text()
+                mutable='FROM '+image.split('@',1)[0]+':latest\n'
+                assert docker_text.count(mutable)==1
+                dockerfile.write_text(docker_text.replace(mutable,'FROM '+image+'\n',1))
+                run_hashes={f.relative_to(run_task).as_posix():sha(f) for f in run_task.rglob('*') if f.is_file()}
+                assert run_hashes.keys()==exact.keys() and [k for k in exact if run_hashes[k]!=exact[k]]==['environment/Dockerfile']
+                case_summary['runtime_only_dockerfile_sha256']=run_hashes['environment/Dockerfile']
+                task=run_task.resolve()
+                task_config=tomllib.loads((task/'task.toml').read_text())
+                assert task_config['verifier']['environment_mode']=='separate' and task_config['verifier']['network_mode']=='no-network'
+                assert task_config['artifacts']==['/tmp/harbor-submission/model.patch']
+                case_summary['task_toml_sha256']=sha(task/'task.toml')
+                stage='pull_fixed_image';execute(['docker','pull','--platform','linux/amd64',image],150)
+                detail=json.loads(subprocess.check_output(['docker','image','inspect',image],text=True))[0];assert detail['Architecture']=='amd64' and detail['Os']=='linux';case_summary['image_id']=detail['Id']
+                stage='image_base_target_check'
+                before_base=ids('containers')
+                try:
+                    execute(['docker','run','--rm','--network','none','--entrypoint','/bin/sh',image,'-ec',
+                             'git -c safe.directory=/testbed -c core.fileMode=false -C /testbed diff --quiet 3b7c1817f1823463919422ff41739a15c36796b1 -- src/ol/render/canvas.js src/ol/render/canvas/Immediate.js changelog/upgrade-notes.md test/browser/spec/ol/render/canvas/index.test.js'],45)
+                    case_summary['base_target_paths_match']=True
+                finally:
+                    cleanup_containers(before_base)
+                case_ok=True
+            except Exception as exc:case_summary.update(status='case_preflight_blocked',stage=stage,error_type=type(exc).__name__)
+            for agent in ['oracle','nop']:
+                attempt={'task':n,'agent':agent,'fresh_harbor_execution':False};summary['attempts'].append(attempt)
+                if not case_ok:attempt['status']='not_run_case_preflight_blocked';continue
+                if time.monotonic()-start>24*60:attempt['status']='not_run_job_budget';continue
+                name='openlayers'+n+'-'+agent;before=ids('containers');began=time.monotonic();events=None;ef=None
+                folder=P('trials')/name
+                attempt['log_recovery_accepted']=False
+                try:
+                    ef=(private/(name+'-events.jsonl')).open('wb');events=subprocess.Popen(['docker','events','--format','{{json .}}'],stdout=ef,stderr=subprocess.DEVNULL)
+                    attempt['fresh_harbor_execution']=True
+                    # Keep only these ephemeral task containers for post-verifier dependency inspection.
+                    # Stock task config, egress helper and criteria remain unchanged.
+                    with (private/(name+'.log')).open('wb') as f:r=subprocess.run([cli,'trials','start','--path',str(task),'--env','docker','--agent',agent,'--trial-name',name,'--trials-dir',str(P('trials').resolve()),'--no-force-build','--no-delete','--environment-kwarg','keep_containers=true'],stdout=f,stderr=f,timeout=300)
+                    attempt['cli_exit']=r.returncode;folder=P('trials')/name
+                    if (folder/'result.json').is_file():
+                        result=json.loads((folder/'result.json').read_text());attempt['error_category']=error_category(result.get('exception_info')) if result.get('exception_info') else None;attempt['private_result_sha256']=sha(folder/'result.json');attempt['exception_type']=(result.get('exception_info') or {}).get('exception_type');attempt['harbor_rewards']=(result.get('verifier_result') or {}).get('rewards')
+                        report=folder/'verifier/report.json';reward=folder/'verifier/reward.txt'
+                        source_path='/tmp/harbor-submission/model.patch'
+                        manifest=folder/'artifacts/manifest.json'
+                        proof=folder/'verifier/submission.json'
+                        evidence_ok=False
+                        if manifest.is_file() and proof.is_file():
+                            entries=[e for e in json.loads(manifest.read_text()) if e['source']==source_path and e['status']=='ok' and e['type']=='file']
+                            if len(entries)==1:
+                                actual=folder/entries[0]['destination']; assert actual.resolve().is_relative_to((folder/'artifacts').resolve())
+                                attestation=json.loads(proof.read_text())
+                                same=sha(actual)==attestation['submission_sha256']
+                                empty=actual.stat().st_size==0
+                                def patchid(p):
+                                    with p.open('rb') as stream:
+                                        out=subprocess.check_output(['git','patch-id','--stable'],stdin=stream,text=True).split()
+                                    return out[0] if len(out)==2 else None
+                                expected_patch=(actual.is_file() and not empty and patchid(actual) is not None and patchid(actual)==patchid(task/'solution/gold.patch')) if agent=='oracle' else empty
+                                evidence_ok=same and expected_patch and attestation['empty_submission']==empty and attestation['submission_bytes']==actual.stat().st_size and attestation['base_commit']=='279b3ec2fa343c4f875a955c35ab9cce5ed063f0'
+                                attempt['submission']={'manifest_ok':True,'sha256':sha(actual),'bytes':actual.stat().st_size,'expected_patch':expected_patch,'verifier_digest_matches':same,'accepted':evidence_ok}
+                        if report.is_file() and reward.is_file():
+                            q=json.loads(report.read_text());v=float(reward.read_text().strip());expected=1.0 if agent=='oracle' else 0.0
+                            attempt.update(reward=v,resolved=q.get('resolved'),valid_test_output=q.get('valid_test_output'),per_test=q.get('tests_status'))
+                            declared=json.loads((task/'tests/tests.json').read_text())
+                            f2p=q['tests_status']['FAIL_TO_PASS'];p2p=q['tests_status']['PASS_TO_PASS']
+                            f2p_ok=(f2p['success']==declared['FAIL_TO_PASS'] and not f2p['failure']) if agent=='oracle' else (f2p['failure']==declared['FAIL_TO_PASS'] and not f2p['success'])
+                            buckets_ok=f2p_ok and len(declared['FAIL_TO_PASS'])==1 and p2p['success']==declared['PASS_TO_PASS'] and not declared['PASS_TO_PASS'] and not p2p['failure']
+                            attempt['status']='expected_semantic_result' if r.returncode==0 and evidence_ok and buckets_ok and v==expected and q.get('valid_test_output') and not result.get('exception_info') and (result.get('verifier_result') or {}).get('rewards',{}).get('reward')==expected else 'semantic_or_infrastructure_mismatch'
+                        else:attempt['status']='missing_exported_grading_evidence'
+                    else:attempt['status']='missing_harbor_result'
+                    output=folder/'verifier/test_output.log'
+                    if output.is_file() and output.stat().st_size>0:
+                        attempt['test_output_sha256']=sha(output);txt=output.read_text(errors='replace');attempt['browser_execution_observed']=bool(re.search(r'Executed [1-9]\d* of \d+|TOTAL: [1-9]\d* (?:SUCCESS|FAILED)',txt))
+                        attempt['dependency_resync_observed']='package.json changed by patch; re-syncing dependencies' in txt.splitlines()
+                except subprocess.TimeoutExpired:attempt['status']='outer_diagnostic_budget_timeout'
+                except Exception as exc:attempt.update(status='diagnostic_error',error_type=type(exc).__name__)
+                finally:
+                    containers=[]
+                    def copied_hash(container_id, source_path, name):
+                        target=private/name
+                        process=subprocess.run(['docker','cp',container_id+':'+source_path,str(target)],capture_output=True,text=True,timeout=15)
+                        if process.returncode==0 and target.is_file() and not target.is_symlink():return (sha(target),False)
+                        return (None,process.returncode!=0 and 'could not find the file' in process.stderr.lower())
+                    for cid in ids('containers')-before:
+                        d=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]
+                        labels=d['Config']['Labels'] or {}
+                        project=labels.get('com.docker.compose.project','')
+                        if labels.get('com.docker.compose.service')=='main' and project.startswith(name):
+                            hc=d['HostConfig']
+                            role='verifier' if '__verifier__' in project else 'agent'
+                            log_match={}
+                            if role=='verifier':
+                                for artifact in ('test_output.log','reward.txt','report.json','submission.json'):
+                                    exported=folder/'verifier'/artifact
+                                    digest,_=copied_hash(cid,'/logs/verifier/'+artifact,name+'-runtime-'+artifact)
+                                    log_match[artifact]=bool(digest and exported.is_file() and digest==sha(exported))
+                            control_hash,_=copied_hash(cid,'/testbed/package.json',name+'-'+role+'-control')
+                            probes={f:copied_hash(cid,'/tests/'+f,name+'-'+role+'-'+f) for f in ('test.sh','grade.py','tests.json','task_metadata.json')}
+                            if role=='agent':
+                                correct_test_visibility=control_hash is not None and all(missing for _,missing in probes.values())
+                            else:
+                                correct_test_visibility=all(digest==sha(task/'tests'/f) for f,(digest,_) in probes.items())
+                            containers.append({'id_prefix':cid[:12],'role':role,'image':d['Image'],'privileged':hc['Privileged'],'cap_add':hc['CapAdd'] or [],'host_network':hc['NetworkMode']=='host','tests_mount':any(m['Destination']=='/tests' for m in d['Mounts']),'verifier_log_mount':any(m['Destination']=='/logs/verifier' for m in d['Mounts']),'expected_test_file_visibility':correct_test_visibility,'verifier_log_matches':log_match,'runtime_logs_match_export':len(log_match)==4 and all(log_match.values())})
+                    attempt['containers']=containers
+                    separation=len(containers)==2 and {c['role'] for c in containers}=={'agent','verifier'} and len({c['id_prefix'] for c in containers})==2 and len({c['image'] for c in containers})==1 and all(not c['privileged'] and not c['cap_add'] and not c['host_network'] and c['expected_test_file_visibility'] for c in containers) and all(not c['tests_mount'] for c in containers if c['role']=='agent')
+                    attempt['log_recovery_accepted']=bool(attempt.get('test_output_sha256')) and any(c['role']=='verifier' and c['runtime_logs_match_export'] for c in containers)
+                    attempt['separation_accepted']=separation
+                    if events:
+                        events.terminate()
+                        try:events.wait(timeout=5)
+                        except subprocess.TimeoutExpired:events.kill()
+                    if ef:ef.close()
+                    ep=private/(name+'-events.jsonl');et=ep.read_text(errors='replace') if ep.exists() else ''
+                    def is_verifier_deny_event(line):
+                        try:event=json.loads(line)
+                        except ValueError:return False
+                        attributes=event.get('Actor',{}).get('Attributes',{})
+                        action=event.get('Action','')
+                        project=attributes.get('com.docker.compose.project','')
+                        container_name=attributes.get('name','')
+                        target=project or container_name
+                        return action.startswith('exec_create:') and 'deny-all' in action and target.startswith(name+'__verifier__')
+                    attempt['deny_all_exec_events']=sum('deny-all' in x and 'exec_create' in x for x in et.splitlines())
+                    attempt['verifier_deny_all_exec_events']=sum(is_verifier_deny_event(x) for x in et.splitlines())
+                    attempt['grading_accepted']=attempt.get('status')=='expected_semantic_result' and attempt['verifier_deny_all_exec_events']>0 and attempt['separation_accepted'] and attempt['log_recovery_accepted'] and attempt.get('browser_execution_observed',False)
+                    cleanup_containers(before);attempt['seconds']=round(time.monotonic()-began,2)
+            if setup_ok:
+                for iid in ids('images')-before_images:subprocess.run(['docker','image','rm','-f',iid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=25)
+        summary['seconds']=round(time.monotonic()-start,2)
+        assert len(summary['attempts'])==2
+        summary['all_required_grades_accepted']=all(x.get('grading_accepted',False) for x in summary['attempts'])
+        summary['diagnostic_accepted']=summary['all_required_grades_accepted'] and all(x.get('base_target_paths_match',False) for x in summary['cases'])
+        summary['failure_marker']=None if summary['diagnostic_accepted'] else 'DIAGNOSTIC_NOT_ACCEPTED'
+        print('SANITIZED_SUMMARY '+json.dumps(summary),flush=True)
+        with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:f.write('## OpenLayers 14483 exact-adapter Harbor diagnostic\nOnly sanitized outcomes; raw logs ephemeral. Not full480 or model parity.\n```json\n'+json.dumps(summary,indent=2)+'\n```\n')
+        if not summary['diagnostic_accepted']:raise SystemExit(1)
+        PY
